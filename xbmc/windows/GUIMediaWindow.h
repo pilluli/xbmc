@@ -87,6 +87,12 @@ protected:
    */
   void GetFilteredItems(const CStdString &filter, CFileItemList &items);
 
+  /*! 
+    \brief Filters out items that have the property "unavailable"  
+    \param items CFileItemList to filter 
+  */ 
+  void GetFilteredUnavailableItems(CFileItemList &items); 
+
   // check for a disc or connection
   virtual bool HaveDiscOrConnection(CStdString& strPath, int iDriveType);
   void ShowShareErrorMessage(CFileItem* pItem);

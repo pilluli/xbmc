@@ -213,6 +213,8 @@ bool CGUIMediaWindow::OnMessage(CGUIMessage& message)
   case GUI_MSG_WINDOW_DEINIT:
     {
       m_iSelectedItem = m_viewControl.GetSelectedItem();
+      if(g_settings.m_bMyVideoShowUnavailableMode) 
+	this->SetProperty("saved_path", m_vecItems->Get(m_iSelectedItem)->m_strPath); 
       m_iLastControl = GetFocusedControlID();
       CGUIWindow::OnMessage(message);
       // Call ClearFileItems() after our window has finished doing any WindowClose
@@ -356,15 +358,23 @@ bool CGUIMediaWindow::OnMessage(CGUIMessage& message)
       }
       else if (message.GetParam1()==GUI_MSG_UPDATE && IsActive())
       {
+	CStdString actPath = m_vecItems->m_strPath;
         if (message.GetNumStringParams())
         {
           m_vecItems->m_strPath = message.GetStringParam();
-          if (message.GetParam2()) // param2 is used for resetting the history
+          if (message.GetParam2() % 2)
             SetHistoryForPath(m_vecItems->m_strPath);
         }
         // clear any cached listing
         m_vecItems->RemoveDiscCache(GetID());
         Update(m_vecItems->m_strPath);
+
+	if(message.GetParam2() / 2) 
+	{ 
+	  m_history.RemoveParentPath(); 
+	  this->m_history.RemoveSelectedItem(m_vecItems->m_strPath); 
+	  this->m_vecItems->m_strPath = actPath; 
+	}
       }
       else if (message.GetParam1()==GUI_MSG_UPDATE_ITEM && message.GetItem())
       {
@@ -1498,9 +1508,18 @@ bool CGUIMediaWindow::WaitForNetwork() const
 void CGUIMediaWindow::OnFilterItems(const CStdString &filter)
 {
   CStdString currentItem;
-  int item = m_viewControl.GetSelectedItem();
-  if (item >= 0)
-    currentItem = m_vecItems->Get(item)->m_strPath;
+  CStdString saved_path = this->GetProperty("saved_path");
+  if(saved_path.IsEmpty())
+  {
+    int item = m_viewControl.GetSelectedItem();
+    if (item >= 0)
+      currentItem = m_vecItems->Get(item)->m_strPath;
+  }
+  else
+  {
+    currentItem = saved_path;
+    this->SetProperty("saved_path", "");
+  }
   
   m_viewControl.Clear();
   
@@ -1527,6 +1546,7 @@ void CGUIMediaWindow::GetFilteredItems(const CStdString &filter, CFileItemList &
   if (trimmedFilter.IsEmpty())
   {
     items.Append(*m_unfilteredItems);
+    GetFilteredUnavailableItems(items);
     return;
   }
   
@@ -1559,6 +1579,7 @@ void CGUIMediaWindow::GetFilteredItems(const CStdString &filter, CFileItemList &
     if (pos != CStdString::npos)
       items.Add(item);
   }
+  GetFilteredUnavailableItems(items);
 }
 
 CStdString CGUIMediaWindow::GetStartFolder(const CStdString &dir)
@@ -1566,4 +1587,22 @@ CStdString CGUIMediaWindow::GetStartFolder(const CStdString &dir)
   if (dir.Equals("$ROOT") || dir.Equals("Root"))
     return "";
   return dir;
+}
+
+void CGUIMediaWindow::GetFilteredUnavailableItems(CFileItemList &items)
+{ 
+  // Remove items in list if unavailable 
+  if ( g_settings.m_bMyVideoShowUnavailableMode )
+  {
+    for (int i = 0; i < items.Size(); i++)
+    {
+      CFileItemPtr item = items.Get(i);
+
+      if (item->GetPropertyBOOL("unavailable"))
+      {
+        items.Remove(i);
+        i--;
+      }
+    }
+  }
 }

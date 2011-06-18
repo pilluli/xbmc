@@ -184,6 +184,7 @@ public:
   bool m_bMyMusicPlaylistShuffle;
   int m_iMyMusicStartWindow;
 
+  bool m_bMyVideoShowUnavailableMode; 
   // for scanning
   bool m_bMyMusicIsScanning;
 
