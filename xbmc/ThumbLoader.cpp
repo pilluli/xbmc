@@ -195,7 +195,7 @@ void CVideoThumbLoader::OnLoaderFinish()
             //           need to use it to trigger flatting tvshow when only one season is available
             //           and keep GUI thinking that is in Season Navigation
             CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0,0, GUI_MSG_UPDATE, 2);
-            msg.SetStringParam(item->m_strPath);
+            msg.SetStringParam(item->GetPath());
             g_windowManager.SendThreadMessage(msg);
             m_AvailChecker.ResetCounter();
             return;
