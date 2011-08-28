@@ -2355,6 +2355,8 @@ bool CGUIInfoManager::GetMultiInfoBool(const GUIInfo &info, int contextWindow, c
             if (window)
               bReturn = g_settings.GetWatchMode(((CGUIMediaWindow *)window)->CurrentDirectory().GetContent()) == VIDEO_SHOW_UNWATCHED;
           }
+          else if ( m_stringParameters[info.GetData1()].Equals("hideunavailable") ) 
+            bReturn = g_settings.m_bMyVideoShowUnavailableMode;
         }
         break;
       case SYSTEM_HAS_ADDON:

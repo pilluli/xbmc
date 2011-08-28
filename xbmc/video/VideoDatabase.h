@@ -587,7 +587,13 @@ public:
   unsigned int GetMusicVideoIDs(const CStdString& strWhere, std::vector<std::pair<int,int> > &songIDs);
   bool GetRandomMusicVideo(CFileItem* item, int& idSong, const CStdString& strWhere);
 
-  static void VideoContentTypeToString(VIDEODB_CONTENT_TYPE type, CStdString& out)
+  // availability checking dedicated methods 
+  bool GetPathsForTvShow(int idShow, std::vector<CStdString>& paths); 
+  bool GetFileNamesForTvShow(int idShow, std::vector<CStdString>& paths); 
+  bool GetPathsForSeason(int idShow, int iSeason, std::vector<CStdString>& paths); 
+  bool GetFileNamesForSeason(int idShow, int iSeason, std::vector<CStdString>& paths); 
+
+static void VideoContentTypeToString(VIDEODB_CONTENT_TYPE type, CStdString& out)
   {
     switch (type)
     {

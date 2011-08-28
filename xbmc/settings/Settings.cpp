@@ -127,6 +127,7 @@ void CSettings::Initialize()
   m_watchMode["movies"] = VIDEO_SHOW_ALL;
   m_watchMode["tvshows"] = VIDEO_SHOW_ALL;
   m_watchMode["musicvideos"] = VIDEO_SHOW_ALL;
+  m_bMyVideoShowUnavailableMode = false; 
 
   m_iSystemTimeTotalUp = 0;
   m_HttpApiBroadcastLevel = 0;
@@ -631,6 +632,9 @@ bool CSettings::LoadSettings(const CStdString& strSettingsFile)
     GetInteger(pElement, "watchmodetvshows", m_watchMode["tvshows"], VIDEO_SHOW_ALL, VIDEO_SHOW_ALL, VIDEO_SHOW_WATCHED);
     GetInteger(pElement, "watchmodemusicvideos", m_watchMode["musicvideos"], VIDEO_SHOW_ALL, VIDEO_SHOW_ALL, VIDEO_SHOW_WATCHED);
 
+    //read stored setting - filtering unavailable media is disabled by default 
+    XMLUtils::GetBoolean(pElement, "showunavailablemode", m_bMyVideoShowUnavailableMode); 
+
     XMLUtils::GetBoolean(pElement, "flatten", m_bMyVideoNavFlatten);
 
     TiXmlElement *pChild = pElement->FirstChildElement("playlist");
@@ -804,6 +808,7 @@ bool CSettings::SaveSettings(const CStdString& strSettingsFile, CGUISettings *lo
   XMLUtils::SetInt(pNode, "watchmodemovies", m_watchMode.find("movies")->second);
   XMLUtils::SetInt(pNode, "watchmodetvshows", m_watchMode.find("tvshows")->second);
   XMLUtils::SetInt(pNode, "watchmodemusicvideos", m_watchMode.find("musicvideos")->second);
+  XMLUtils::SetBoolean(pNode, "showunavailablemode", m_bMyVideoShowUnavailableMode); 
 
   XMLUtils::SetBoolean(pNode, "flatten", m_bMyVideoNavFlatten);
 

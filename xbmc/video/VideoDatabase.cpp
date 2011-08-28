@@ -7838,3 +7838,104 @@ bool CVideoDatabase::GetItemsForPath(const CStdString &content, const CStdString
     items[i]->SetPath(items[i]->GetVideoInfoTag()->m_basePath);
   return items.Size() > 0;
 }
+
+bool CVideoDatabase::GetPathsForTvShow(int idShow, vector<CStdString>& paths)
+{
+  CStdString strSQL;
+  try
+  {
+    if (NULL == m_pDB.get()) return false;
+    if (NULL == m_pDS.get()) return false;
+    strSQL = PrepareSQL("SELECT DISTINCT strPath FROM path JOIN files ON files.idPath = path.idPath JOIN episode ON episode.idFile=files.idFile JOIN tvshowlinkepisode ON tvshowlinkepisode.idEpisode=episode.idEpisode WHERE tvshowlinkepisode.idShow=%i",idShow);
+    m_pDS->query(strSQL.c_str());
+    while (!m_pDS->eof())
+    {
+      paths.push_back(m_pDS->fv(0).get_asString());
+      m_pDS->next();
+    }
+    m_pDS->close();
+    return true;
+  }
+  catch (...)
+  {
+    CLog::Log(LOGERROR, "%s error during query: %s",__FUNCTION__, strSQL.c_str());
+  }
+  return false;
+}
+
+bool CVideoDatabase::GetFileNamesForTvShow(int idShow, std::vector<CStdString>& paths)
+{
+  CStdString strSQL;
+  try
+  {
+    if (NULL == m_pDB.get()) return false;
+    if (NULL == m_pDS.get()) return false;
+    strSQL = PrepareSQL("SELECT DISTINCT path.strPath, files.strFileName FROM path JOIN files ON files.idPath = path.idPath JOIN episode ON episode.idFile=files.idFile JOIN tvshowlinkepisode ON tvshowlinkepisode.idEpisode=episode.idEpisode WHERE tvshowlinkepisode.idShow=%i",idShow);
+    m_pDS->query(strSQL.c_str());
+    while (!m_pDS->eof())
+    {
+      CStdString file;
+      file.Format("%s/%s", m_pDS->fv(0).get_asString(), m_pDS->fv(1).get_asString());
+      paths.push_back(file);
+      m_pDS->next();
+    }
+    m_pDS->close();
+    return true;
+  }
+  catch (...)
+  {
+    CLog::Log(LOGERROR, "%s error during query: %s",__FUNCTION__, strSQL.c_str());
+  }
+  return false;
+}
+
+bool CVideoDatabase::GetPathsForSeason(int idShow, int iSeason, vector<CStdString>& paths)
+{
+  CStdString strSQL;
+  try
+  {
+    if (NULL == m_pDB.get()) return false;
+    if (NULL == m_pDS.get()) return false;
+    strSQL = PrepareSQL("SELECT DISTINCT strPath FROM path JOIN files ON files.idPath = path.idPath JOIN episode ON episode.idFile=files.idFile and episode.c12 = %i JOIN tvshowlinkepisode ON tvshowlinkepisode.idEpisode=episode.idEpisode WHERE tvshowlinkepisode.idShow=%i", iSeason, idShow);
+    m_pDS->query(strSQL.c_str());
+    while (!m_pDS->eof())
+    {
+      paths.push_back(m_pDS->fv(0).get_asString());
+      m_pDS->next();
+    }
+    m_pDS->close();
+    return true;
+  }
+  catch (...)
+  {
+    CLog::Log(LOGERROR, "%s error during query: %s",__FUNCTION__, strSQL.c_str());
+  }
+  return false;
+}
+
+bool CVideoDatabase::GetFileNamesForSeason(int idShow, int iSeason, vector<CStdString>& paths)
+{
+  CStdString strSQL;
+  try
+  {
+    if (NULL == m_pDB.get()) return false;
+    if (NULL == m_pDS.get()) return false;
+    strSQL = PrepareSQL("SELECT DISTINCT path.strPath, files.strFileName FROM path JOIN files ON files.idPath = path.idPath JOIN episode ON episode.idFile=files.idFile and episode.c12 = %i JOIN tvshowlinkepisode ON tvshowlinkepisode.idEpisode=episode.idEpisode WHERE tvshowlinkepisode.idShow=%i", iSeason, idShow);
+    m_pDS->query(strSQL.c_str());
+    while (!m_pDS->eof())
+    {
+      CStdString file;
+      file.Format("%s/%s", m_pDS->fv(0).get_asString(), m_pDS->fv(1).get_asString());
+      paths.push_back(file);
+      m_pDS->next();
+    }
+    m_pDS->close();
+    return true;
+  }
+  catch (...)
+  {
+    CLog::Log(LOGERROR, "%s error during query: %s",__FUNCTION__, strSQL.c_str());
+  }
+  return false;
+}
+

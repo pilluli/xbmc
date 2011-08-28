@@ -1496,6 +1496,9 @@
   <string id="16104">Mark as unwatched</string>
   <string id="16105">Edit title</string>
 
+  <string id="16199">Hide unavailable</string>
+  <string id="16198">Enable availability checks</string> 
+
   <string id="16200">Operation was aborted</string>
   <string id="16201">Copy failed</string>
   <string id="16202">Failed to copy at least one file</string>

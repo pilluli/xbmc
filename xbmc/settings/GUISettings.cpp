@@ -559,6 +559,7 @@ void CGUISettings::Initialize()
   AddBool(NULL, "videolibrary.flattenmoviesets", 22002, false);
   AddBool(vdl, "videolibrary.updateonstartup", 22000, false);
   AddBool(vdl, "videolibrary.backgroundupdate", 22001, false);
+  AddBool(vdl, "videolibrary.fileavailabilitychecking", 16198, false);
   AddSeparator(vdl, "videolibrary.sep3");
   AddString(vdl, "videolibrary.cleanup", 334, "", BUTTON_CONTROL_STANDARD);
   AddString(vdl, "videolibrary.export", 647, "", BUTTON_CONTROL_STANDARD);
