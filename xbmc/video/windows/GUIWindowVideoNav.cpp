@@ -201,7 +201,7 @@ bool CGUIWindowVideoNav::OnMessage(CGUIMessage& message)
       {
         g_settings.m_bMyVideoShowUnavailableMode = !g_settings.m_bMyVideoShowUnavailableMode;
         g_settings.Save(); 
-        Update(m_vecItems->m_strPath); 
+        Update(m_vecItems->GetPath()); 
         return true; 
       }
     }
