@@ -22,6 +22,7 @@
 #include "AddonDatabase.h"
 #include "addons/AddonManager.h"
 #include "utils/log.h"
+#include "utils/Variant.h"
 #include "XBDateTime.h"
 #include "addons/Service.h"
 #include "dbwrappers/dataset.h"
@@ -507,15 +508,7 @@ bool CAddonDatabase::GetRepository(const CStdString& id, VECADDONS& addons)
   return false;
 }
 
-bool CAddonDatabase::Search(const CStdString& search, VECADDONS& items)
-{
-  // first grab all the addons that match
-  SearchTitle(search,items);
-
-  return true;
-}
-
-bool CAddonDatabase::SearchTitle(const CStdString& search, VECADDONS& addons)
+bool CAddonDatabase::Search(const CStdString& search, VECADDONS& addons)
 {
   try
   {
@@ -523,7 +516,8 @@ bool CAddonDatabase::SearchTitle(const CStdString& search, VECADDONS& addons)
     if (NULL == m_pDS.get()) return false;
 
     CStdString strSQL;
-    strSQL=PrepareSQL("select idAddon from addon where name like '%s%%'", search.c_str());
+    strSQL=PrepareSQL("SELECT id FROM addon WHERE name LIKE '%%%s%%' OR summary LIKE '%%%s%%' OR description LIKE '%%%s%%'", search.c_str(), search.c_str(), search.c_str());
+    CLog::Log(LOGDEBUG, "%s query: %s", __FUNCTION__, strSQL.c_str());
 
     if (!m_pDS->query(strSQL.c_str())) return false;
     if (m_pDS->num_rows() == 0) return false;

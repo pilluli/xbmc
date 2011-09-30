@@ -53,6 +53,7 @@
 #include "utils/FileUtils.h"
 #include "pythreadstate.h"
 #include "utils/log.h"
+#include "pyrendercapture.h"
 
 // include for constants
 #include "pyutil.h"
@@ -126,8 +127,8 @@ namespace PYXBMC
 
   // output() method
   PyDoc_STRVAR(output__doc__,
-               "'xbmc.output()' is depreciated and will be removed in future releases,\n"
-               "please use 'xbmc.log()' instead");
+    "'xbmc.output()' is depreciated and will be removed in future releases,\n"
+    "please use 'xbmc.log()' instead");
   
   PyObject* XBMC_Output(PyObject *self, PyObject *args, PyObject *kwds)
   {
@@ -898,7 +899,7 @@ namespace PYXBMC
     "file        : file to calculate subtitle hash and size for\n"
     "\n"
     "example:\n"
-    " - size,hash = xbmcvfs.subHashAndFileSize(file)\n"); 
+    " - size,hash = xbmc.subHashAndFileSize(file)\n"); 
   PyObject* XBMC_subHashAndFileSize(PyObject *self, PyObject *args, PyObject *kwds)
   {
     PyObject *f_line;
@@ -980,6 +981,7 @@ namespace PYXBMC
   InitXBMCTypes(bool bInitTypes)
   {
     initKeyboard_Type();
+    initRenderCapture_Type();
     initPlayer_Type();
     initPlayList_Type();
     initPlayListItem_Type();
@@ -987,6 +989,7 @@ namespace PYXBMC
     initInfoTagVideo_Type();
 
     if (PyType_Ready(&Keyboard_Type) < 0 ||
+        PyType_Ready(&RenderCapture_Type) < 0 ||
         PyType_Ready(&Player_Type) < 0 ||
         PyType_Ready(&PlayList_Type) < 0 ||
         PyType_Ready(&PlayListItem_Type) < 0 ||
@@ -1008,6 +1011,7 @@ namespace PYXBMC
     PyObject* pXbmcModule;
 
     Py_INCREF(&Keyboard_Type);
+    Py_INCREF(&RenderCapture_Type);
     Py_INCREF(&Player_Type);
     Py_INCREF(&PlayList_Type);
     Py_INCREF(&PlayListItem_Type);
@@ -1059,6 +1063,17 @@ namespace PYXBMC
     PyModule_AddIntConstant(pXbmcModule, (char*)"LOGFATAL", LOGFATAL);
     PyModule_AddIntConstant(pXbmcModule, (char*)"LOGNONE", LOGNONE);
     PyModule_AddObject(pXbmcModule, (char*)"abortRequested", PyBool_FromLong(0));
+
+    PyModule_AddObject(pXbmcModule, (char*)"RenderCapture", (PyObject*)&RenderCapture_Type);
+
+    // render capture user states
+    PyModule_AddIntConstant(pXbmcModule, (char*)"CAPTURE_STATE_WORKING", (int)CAPTURESTATE_WORKING);
+    PyModule_AddIntConstant(pXbmcModule, (char*)"CAPTURE_STATE_DONE", (int)CAPTURESTATE_DONE);
+    PyModule_AddIntConstant(pXbmcModule, (char*)"CAPTURE_STATE_FAILED", (int)CAPTURESTATE_FAILED);
+
+    // render capture flags
+    PyModule_AddIntConstant(pXbmcModule, (char*)"CAPTURE_FLAG_CONTINUOUS", (int)CAPTUREFLAG_CONTINUOUS);
+    PyModule_AddIntConstant(pXbmcModule, (char*)"CAPTURE_FLAG_IMMEDIATELY", (int)CAPTUREFLAG_IMMEDIATELY);
   }
 }
 

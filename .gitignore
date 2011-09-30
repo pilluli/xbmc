@@ -49,6 +49,7 @@ config.log
 /build/
 .DS_Store
 *.dSYM
+._*
 /tools/darwin/depends/config.site
 /tools/darwin/depends/config.site.mk
 /tools/darwin/depends/Makefile
@@ -57,11 +58,6 @@ config.log
 /tools/darwin/depends/python26/Makefile
 /tools/darwin/depends/**/.gitignore
 /tools/darwin/depends/**/.installed
-/tools/osx/osx-depends/**/.gitignore
-/tools/osx/osx-depends/**/.installed
-/tools/osx/ios-depends/**/.gitignore
-/tools/osx/ios-depends/**/.installed
-/tools/osx/ios-depends/**/.compiled
 
 .libs/
 .deps/
@@ -106,7 +102,6 @@ config.log
 /addons/skin.confluence/media/Textures.xbt
 /addons/skin.pm3-hd/media/Textures.xbt
 /addons/visualization.dxspectrum/Spectrum_win32dx.vis
-/addons/visualization.glesspectrum/gles_spectrum.vis
 /addons/visualization.glspectrum/opengl_spectrum.vis
 /addons/visualization.milkdrop/MilkDrop_win32dx.vis
 /addons/visualization.projectm/projectM.vis
@@ -129,6 +124,10 @@ config.log
 /xbmc/guilib/Debug
 /xbmc/guilib/Profile
 /xbmc/guilib/Profile_FastCap
+
+# /xbmc/peripherals/
+/xbmc/peripherals/bus/Makefile
+/xbmc/peripherals/devices/Makefile
 
 # /lib/
 /lib/Makefile
@@ -230,6 +229,20 @@ lib/cmyth/Makefile
 /lib/libass/m4/ltsugar.m4
 /lib/libass/m4/ltversion.m4
 /lib/libass/m4/lt~obsolete.m4
+
+# /lib/libcec
+/lib/libcec/Makefile
+/lib/libcec/Makefile.in
+/lib/libcec/aclocal.m4
+/lib/libcec/config.guess
+/lib/libcec/config.sub
+/lib/libcec/configure
+/lib/libcec/depcomp
+/lib/libcec/install-sh
+/lib/libcec/ltmain.sh
+/lib/libcec/missing
+/lib/libcec/src/lib/Makefile.in
+/lib/libcec/src/testclient/Makefile.in
 
 # /lib/libiconv
 /lib/libiconv/libiconv_win32/Debug
@@ -357,6 +370,7 @@ lib/cmyth/Makefile
 /system/ssh.dll
 /system/sqlite3.dll
 /system/libsamplerate-0.dll
+/system/libnfs.dll
 
 # /system/cdrip
 /system/cdrip/lame_enc.dll
@@ -1181,7 +1195,6 @@ lib/cmyth/Makefile
 /xbmc/visualizations/Milkdrop/Release
 
 /xbmc/visualizations/OpenGLSpectrum/Makefile
-/xbmc/visualizations/EGLSpectrum/Makefile
 
 /xbmc/visualizations/WaveForm/Makefile
 /xbmc/visualizations/WaveForm/Debug (DirectX)

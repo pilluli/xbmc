@@ -1,17 +1,18 @@
 include Makefile.include
 
-BUILDTOOLS = gas-preprocessor help2man autoconf automake libtool pkg-config yasm cmake tar dpkg
+BUILDTOOLS = gas-preprocessor help2man m4 autoconf automake libtool pkg-config yasm cmake tar dpkg
 
 SUBDIRS := \
 	Backrow pcre expat gettext readline sqlite3 \
 	liblzo2 freetype2 fontconfig \
 	openssl libssh libssh2 curl \
-	jpeg tiff libpng libogg \
+	libjpeg-turbo tiff libpng libogg \
 	libvorbis libflac libmad fribidi libmpeg2 \
 	libass libcdio libsamplerate librtmp libcrystalhd libnfs \
 	libGLEW libsdl libsdl_mixer libsdl_image \
 	libmicrohttpd libmodplug libbluray libyajl \
-	libplist \
+	libgpg-error libgcrypt afpfs-ng \
+	libplist libshairport \
 	samba python26 mysqlclient boost \
 
 ifeq ($(DARWIN), ios)

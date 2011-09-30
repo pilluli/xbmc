@@ -37,7 +37,6 @@
 #include "settings/Settings.h" 
 #include "settings/AdvancedSettings.h" 
 #include "video/VideoDatabase.h"
-
 #include "cores/dvdplayer/DVDFileInfo.h"
 
 using namespace XFILE;
@@ -144,7 +143,7 @@ bool CThumbExtractor::DoWork()
     result = CDVDFileInfo::ExtractThumb(m_path, m_target, &m_item.GetVideoInfoTag()->m_streamDetails);
     if(result)
     {
-      m_item.SetProperty("HasAutoThumb", "1");
+      m_item.SetProperty("HasAutoThumb", true);
       m_item.SetProperty("AutoThumbImage", m_target);
       m_item.SetThumbnailImage(m_target);
     }
@@ -246,6 +245,15 @@ bool CVideoThumbLoader::LoadItem(CFileItem* pItem)
   ||  pItem->IsParentFolder())
     return false;
 
+  if (pItem->HasVideoInfoTag() && pItem->GetVideoInfoTag()->m_resumePoint.totalTimeInSeconds == 0)
+  {
+    CVideoDatabase db;
+    db.Open();
+    if (db.GetResumePoint(*pItem->GetVideoInfoTag()))
+      pItem->SetInvalid();
+    db.Close();
+  }
+
   CFileItem item(*pItem);
   CStdString cachedThumb(item.GetCachedVideoThumb());
 
@@ -270,7 +278,7 @@ bool CVideoThumbLoader::LoadItem(CFileItem* pItem)
         struct __stat64 st;
         if(CFile::Stat(cachedThumb, &st) == 0 && st.st_size > 0)
         {
-          pItem->SetProperty("HasAutoThumb", "1");
+          pItem->SetProperty("HasAutoThumb", true);
           pItem->SetProperty("AutoThumbImage", cachedThumb);
           pItem->SetThumbnailImage(cachedThumb);
         }
@@ -301,6 +309,7 @@ bool CVideoThumbLoader::LoadItem(CFileItem* pItem)
     CThumbExtractor* extract = new CThumbExtractor(*pItem,pItem->GetPath(),false);
     AddJob(extract);
   }
+
   return true;
 }
 

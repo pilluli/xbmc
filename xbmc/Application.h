@@ -166,6 +166,7 @@ public:
   void ResetScreenSaver();
   int GetVolume() const;
   void SetVolume(long iValue, bool isPercentage = true);
+  bool IsMuted() const;
   void ToggleMute(void);
   void ShowVolumeBar(const CAction *action = NULL);
   int GetPlaySpeed() const;
@@ -359,6 +360,7 @@ protected:
   bool ProcessRemote(float frameTime);
   bool ProcessGamepad(float frameTime);
   bool ProcessEventServer(float frameTime);
+  bool ProcessPeripherals(float frameTime);
   bool ProcessHTTPApiButtons();
   bool ProcessJoystickEvent(const std::string& joystickName, int button, bool isAxis, float fAmount);
 

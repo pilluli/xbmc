@@ -96,6 +96,24 @@ bool CAddonsDirectory::GetDirectory(const CStdString& strPath, CFileItemList &it
     items.SetProperty("reponame",g_localizeStrings.Get(24032));
     items.SetLabel(g_localizeStrings.Get(24032));
   }
+  else if (path.GetHostName().Equals("search"))
+  {
+    CStdString search(path.GetFileName());
+    if (search.IsEmpty() && !GetKeyboardInput(16017, search))
+      return false;
+
+    items.SetProperty("reponame",g_localizeStrings.Get(283));
+    items.SetLabel(g_localizeStrings.Get(283));
+
+    CAddonDatabase database;
+    database.Open();
+    database.Search(search, addons);
+    GenerateListing(path, addons, items, true);
+
+    path.SetFileName(search);
+    items.SetPath(path.Get());
+    return true;
+  }
   else
   {
     reposAsFolders = false;
@@ -163,12 +181,12 @@ bool CAddonsDirectory::GetDirectory(const CStdString& strPath, CFileItemList &it
     for (int i=0;i<items.Size();++i)
     {
       AddonPtr addon2;
-      database.GetAddon(items[i]->GetProperty("Addon.ID"),addon2);
-      if (addon2 && addon2->Version() > AddonVersion(items[i]->GetProperty("Addon.Version"))
+      database.GetAddon(items[i]->GetProperty("Addon.ID").asString(),addon2);
+      if (addon2 && addon2->Version() > AddonVersion(items[i]->GetProperty("Addon.Version").asString())
                  && !database.IsAddonBlacklisted(addon2->ID(),addon2->Version().c_str()))
       {
         items[i]->SetProperty("Addon.Status",g_localizeStrings.Get(24068));
-        items[i]->SetProperty("Addon.UpdateAvail","true");
+        items[i]->SetProperty("Addon.UpdateAvail", true);
       }
     }
   }
@@ -201,7 +219,7 @@ void CAddonsDirectory::GenerateListing(CURL &path, VECADDONS& addons, CFileItemL
     if (addon2 && addon2->Version() < addon->Version())
     {
       pItem->SetProperty("Addon.Status",g_localizeStrings.Get(24068));
-      pItem->SetProperty("Addon.UpdateAvail","true");
+      pItem->SetProperty("Addon.UpdateAvail", true);
     }
     CAddonDatabase::SetPropertiesFromAddon(addon,pItem);
     items.Add(pItem);
@@ -221,7 +239,13 @@ CFileItemPtr CAddonsDirectory::FileItemFromAddon(AddonPtr &addon, const CStdStri
     URIUtils::AddSlashAtEnd(path);
 
   CFileItemPtr item(new CFileItem(path, folder));
-  item->SetLabel(addon->Name());
+
+  CStdString strLabel(addon->Name());
+  if (url.GetHostName().Equals("search"))
+    strLabel.Format("%s - %s", TranslateType(addon->Type(), true), addon->Name());
+
+  item->SetLabel(strLabel);
+
   if (!(basePath.Equals("addons://") && addon->Type() == ADDON_REPOSITORY))
     item->SetLabel2(addon->Version().c_str());
   item->SetThumbnailImage(addon->Icon());
