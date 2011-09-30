@@ -185,7 +185,7 @@ void CVideoThumbLoader::OnLoaderFinish()
         {
           CFileItemPtr item = this->m_pVecItems->Get(i);
           
-          if(item->GetVideoInfoTag()->m_iSeason > 0 && !item->GetPropertyBOOL("unavailable"))
+          if(item->GetVideoInfoTag()->m_iSeason > 0 && !item->GetProperty("unavailable").asBoolean())
           {
             // notify gui to refresh view
             // modified GUI_MSG_UPDATE's Params2 handling:
@@ -424,7 +424,7 @@ bool CMusicThumbLoader::LoadItem(CFileItem* pItem)
 
 void CAvailabilityChecker::CompareUnavailibility(bool new_unavailability, CFileItem *pItem)
 {
-  if (new_unavailability != pItem->GetPropertyBOOL("unavailable"))
+  if (new_unavailability != pItem->GetProperty("unavailable").asBoolean())
   {
     pItem->SetProperty("unavailable", new_unavailability);
     this->m_bAnyChanges = true;
