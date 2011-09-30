@@ -1607,7 +1607,7 @@ void CGUIMediaWindow::GetFilteredUnavailableItems(CFileItemList &items)
     {
       CFileItemPtr item = items.Get(i);
 
-      if (item->GetPropertyBOOL("unavailable"))
+      if (item->GetProperty("unavailable").asBoolean())
       {
         items.Remove(i);
         i--;
