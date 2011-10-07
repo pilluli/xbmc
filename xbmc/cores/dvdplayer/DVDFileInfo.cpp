@@ -30,6 +30,7 @@
 #include "utils/TimeUtils.h"
 #include "utils/URIUtils.h"
 
+#include "Util.h"
 #include "DVDClock.h"
 #include "DVDStreamInfo.h"
 #include "DVDInputStreams/DVDInputStream.h"
