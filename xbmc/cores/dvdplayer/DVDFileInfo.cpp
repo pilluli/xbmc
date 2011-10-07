@@ -30,6 +30,7 @@
 #include "utils/TimeUtils.h"
 #include "utils/URIUtils.h"
 
+#include "Util.h"
 #include "DVDClock.h"
 #include "DVDStreamInfo.h"
 #include "DVDInputStreams/DVDInputStream.h"
@@ -456,7 +457,7 @@ bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNam
     {
       // determine language from filename, unless it's a sub with idx
       bool isVobsub = false;
-      if ( CUtil::GetExtension(vecSubtitles[i]) == ".sub" ) 
+      if ( URIUtils::GetExtension(vecSubtitles[i]) == ".sub" ) 
       {
 	CStdString strSubFile;
 	CStdString strSubDirectory;
