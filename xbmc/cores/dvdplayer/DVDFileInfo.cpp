@@ -30,7 +30,6 @@
 #include "utils/TimeUtils.h"
 #include "utils/URIUtils.h"
 
-#include "Util.h"
 #include "DVDClock.h"
 #include "DVDStreamInfo.h"
 #include "DVDInputStreams/DVDInputStream.h"
@@ -400,15 +399,15 @@ bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNam
   
   CStdString strMovieFileName;
   CStdString strDirectory;
-  CUtil::Split(strFileNameAndPath, strDirectory, strMovieFileName);
-  CStdString strMovieFileNameNoExt(CUtil::ReplaceExtension(strMovieFileName, ""));
+  URIUtils::Split(strFileNameAndPath, strDirectory, strMovieFileName);
+  CStdString strMovieFileNameNoExt(URIUtils::ReplaceExtension(strMovieFileName, ""));
   CStdString strMovieFileNameNoExtNoCase(strMovieFileNameNoExt);
   strMovieFileNameNoExtNoCase.MakeLower();
   
   for (unsigned int i=0; i < vecSubtitles.size(); i++)
   {
     // if vobsub subtitle:              
-    if ( CUtil::GetExtension(vecSubtitles[i]) == ".idx" ) 
+    if ( URIUtils::GetExtension(vecSubtitles[i]) == ".idx" ) 
     {
       // determine .sub file
       CStdString strSubFile;
@@ -416,12 +415,12 @@ bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNam
       CStdString strSubFullPath("");
       CStdString strIdxFile;
       CStdString strIdxDirectory;
-      CUtil::Split(vecSubtitles[i], strIdxDirectory, strIdxFile);
+      URIUtils::Split(vecSubtitles[i], strIdxDirectory, strIdxFile);
       for (unsigned int j=0; j < vecSubtitles.size(); j++)
       {
-	CUtil::Split(vecSubtitles[j], strSubDirectory, strSubFile);
-	if ( CUtil::GetExtension(strSubFile) == ".sub" &&
-	     CUtil::ReplaceExtension(strIdxFile,"").CompareNoCase( CUtil::ReplaceExtension(strSubFile,"") ) == 0 )
+	URIUtils::Split(vecSubtitles[j], strSubDirectory, strSubFile);
+	if ( URIUtils::GetExtension(strSubFile) == ".sub" &&
+	     URIUtils::ReplaceExtension(strIdxFile,"").CompareNoCase( URIUtils::ReplaceExtension(strSubFile,"") ) == 0 )
 	  strSubFullPath = vecSubtitles[j];
       }
       
@@ -463,12 +462,12 @@ bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNam
 	CStdString strSubDirectory;
 	CStdString strIdxFile;
 	CStdString strIdxDirectory;
-	CUtil::Split(vecSubtitles[i], strSubDirectory, strSubFile);
+	URIUtils::Split(vecSubtitles[i], strSubDirectory, strSubFile);
 	for (unsigned int j=0; j < vecSubtitles.size(); j++)
 	{
-	  CUtil::Split(vecSubtitles[j], strIdxDirectory, strIdxFile);
-	  if ( CUtil::GetExtension(strIdxFile) == ".idx" &&
-	       CUtil::ReplaceExtension(strIdxFile,"").CompareNoCase( CUtil::ReplaceExtension(strSubFile,"") ) == 0 )
+	  URIUtils::Split(vecSubtitles[j], strIdxDirectory, strIdxFile);
+	  if ( URIUtils::GetExtension(strIdxFile) == ".idx" &&
+	       URIUtils::ReplaceExtension(strIdxFile,"").CompareNoCase( URIUtils::ReplaceExtension(strSubFile,"") ) == 0 )
 	    isVobsub = true;
 	}
       }
@@ -478,8 +477,8 @@ bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNam
 	CStdString strSubtitleFileName;
 	CStdString strDirectory;
         
-        CUtil::Split(vecSubtitles[i], strDirectory, strSubtitleFileName);
-	CStdString strSubtitleFileNameNoExt(CUtil::ReplaceExtension(strSubtitleFileName, ""));
+        URIUtils::Split(vecSubtitles[i], strDirectory, strSubtitleFileName);
+	CStdString strSubtitleFileNameNoExt(URIUtils::ReplaceExtension(strSubtitleFileName, ""));
 	CStdString strSubtitleFileNameNoExtNoCase(strSubtitleFileNameNoExt);
 	strSubtitleFileNameNoExtNoCase.MakeLower();
         
