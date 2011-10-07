@@ -39,6 +39,7 @@ public:
   virtual void Archive(CArchive& ar);
   virtual void Serialize(CVariant& value);
   virtual bool IsWorseThan(CStreamDetail *that) { return true; };
+  virtual bool operator==(const CStreamDetail &other) const { return false; };
 
   const StreamType m_eType;
 
@@ -54,6 +55,7 @@ public:
   virtual void Archive(CArchive& ar);
   virtual void Serialize(CVariant& value);
   virtual bool IsWorseThan(CStreamDetail *that);
+  bool operator==(const CStreamDetail &other) const;
 
   int m_iWidth;
   int m_iHeight;
@@ -69,6 +71,7 @@ public:
   virtual void Archive(CArchive& ar);
   virtual void Serialize(CVariant& value);
   virtual bool IsWorseThan(CStreamDetail *that);
+  bool operator==(const CStreamDetail &other) const; 
 
   int m_iChannels;
   CStdString m_strCodec;
@@ -82,6 +85,7 @@ public:
   virtual void Archive(CArchive& ar);
   virtual void Serialize(CVariant& value);
   virtual bool IsWorseThan(CStreamDetail *that);
+  bool operator==(const CStreamDetail &other) const;
 
   CStdString m_strLanguage;
 };
@@ -93,6 +97,10 @@ public:
   CStreamDetails(const CStreamDetails &that);
   ~CStreamDetails() { Reset(); };
   CStreamDetails& operator=(const CStreamDetails &that);
+  bool operator==(const CStreamDetails &other) const; 
+  bool operator!=(const CStreamDetails &other) const;
+
+  void logStreamDetails();
 
   static CStdString VideoDimsToResolutionDescription(int iWidth, int iHeight);
   static CStdString VideoAspectToAspectDescription(float fAspect);
@@ -126,9 +134,10 @@ public:
   // Language to use for "best" subtitle stream
   CStdString m_strLanguage;
 
+  std::vector<CStreamDetail *> m_vecItems;
+
 private:
   CStreamDetail *NewStream(CStreamDetail::StreamType type);
-  std::vector<CStreamDetail *> m_vecItems;
   CStreamDetailVideo *m_pBestVideo;
   CStreamDetailAudio *m_pBestAudio;
   CStreamDetailSubtitle *m_pBestSubtitle;

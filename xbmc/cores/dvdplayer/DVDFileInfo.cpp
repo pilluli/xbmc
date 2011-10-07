@@ -39,6 +39,7 @@
 #include "DVDDemuxers/DVDDemuxUtils.h"
 #include "DVDDemuxers/DVDFactoryDemuxer.h"
 #include "DVDDemuxers/DVDDemuxFFmpeg.h"
+#include "DVDDemuxers/DVDDemuxVobSub.h"
 #include "DVDCodecs/DVDCodecs.h"
 #include "DVDCodecs/DVDFactoryCodec.h"
 #include "DVDCodecs/Video/DVDVideoCodec.h"
@@ -48,6 +49,7 @@
 #include "DllSwScale.h"
 #include "filesystem/File.h"
 
+#include "utils/LangCodeExpander.h" 
 
 bool CDVDFileInfo::GetFileDuration(const CStdString &path, int& duration)
 {
@@ -290,6 +292,10 @@ bool CDVDFileInfo::GetFileStreamDetails(CFileItem *pItem)
     bool retVal = DemuxerToStreamDetails(pInputStream, pDemuxer, pItem->GetVideoInfoTag()->m_streamDetails, strFileNameAndPath);
     delete pDemuxer;
     delete pInputStream;
+    
+    // get stream details from external subtitles 
+    CDVDFileInfo::ExternalSubtitlesToStreamDetails( strFileNameAndPath, pItem->GetVideoInfoTag()->m_streamDetails );     
+    
     return retVal;
   }
   else
@@ -380,3 +386,131 @@ bool CDVDFileInfo::DemuxerToStreamDetails(CDVDInputStream *pInputStream, CDVDDem
   return retVal;
 }
 
+/**
+  + * \brief Scan for available subtitles for movie file and add to streamdetails
+  + * \return true if at at least one external subtitle is found
+  + */
+bool CDVDFileInfo::ExternalSubtitlesToStreamDetails(const CStdString& strFileNameAndPath, CStreamDetails& details  )
+{
+  bool retVal = false;
+  std::vector<CStdString> vecSubtitles;
+  
+  CUtil::ScanForExternalSubtitles(strFileNameAndPath, vecSubtitles);
+  
+  CStdString strMovieFileName;
+  CStdString strDirectory;
+  CUtil::Split(strFileNameAndPath, strDirectory, strMovieFileName);
+  CStdString strMovieFileNameNoExt(CUtil::ReplaceExtension(strMovieFileName, ""));
+  CStdString strMovieFileNameNoExtNoCase(strMovieFileNameNoExt);
+  strMovieFileNameNoExtNoCase.MakeLower();
+  
+  for (unsigned int i=0; i < vecSubtitles.size(); i++)
+  {
+    // if vobsub subtitle:              
+    if ( CUtil::GetExtension(vecSubtitles[i]) == ".idx" ) 
+    {
+      // determine .sub file
+      CStdString strSubFile;
+      CStdString strSubDirectory;
+      CStdString strSubFullPath("");
+      CStdString strIdxFile;
+      CStdString strIdxDirectory;
+      CUtil::Split(vecSubtitles[i], strIdxDirectory, strIdxFile);
+      for (unsigned int j=0; j < vecSubtitles.size(); j++)
+      {
+	CUtil::Split(vecSubtitles[j], strSubDirectory, strSubFile);
+	if ( CUtil::GetExtension(strSubFile) == ".sub" &&
+	     CUtil::ReplaceExtension(strIdxFile,"").CompareNoCase( CUtil::ReplaceExtension(strSubFile,"") ) == 0 )
+	  strSubFullPath = vecSubtitles[j];
+      }
+      
+      CDVDDemux* subtitleDemuxer = NULL;
+      
+      std::auto_ptr<CDVDDemuxVobsub::CDVDDemuxVobsub> demux(new CDVDDemuxVobsub());
+      if(!demux->Open( vecSubtitles[i], strSubFullPath  ))
+	return false;
+      
+      subtitleDemuxer = demux.release();
+      
+      for (int iStream=0; iStream< subtitleDemuxer->GetNrOfStreams(); iStream++)
+      {
+	CDemuxStream *vobSubStream = NULL;
+	vobSubStream = subtitleDemuxer->GetStream(iStream);
+        
+        CStreamDetailSubtitle *p = new CStreamDetailSubtitle();
+	
+	CStdString langCode;
+	if ( g_LangCodeExpander.ConvertTwoToThreeCharCode(langCode, vobSubStream->language) )
+	{
+	  p->m_strLanguage = langCode;
+	}
+	else // could not determine could not find iso639-2, add the string as is
+	{
+	  p->m_strLanguage = vobSubStream->language;
+	}
+        details.AddStream(p);
+	retVal = true;
+      }
+    }
+    else
+    {
+      // determine language from filename, unless it's a sub with idx
+      bool isVobsub = false;
+      if ( CUtil::GetExtension(vecSubtitles[i]) == ".sub" ) 
+      {
+	CStdString strSubFile;
+	CStdString strSubDirectory;
+	CStdString strIdxFile;
+	CStdString strIdxDirectory;
+	CUtil::Split(vecSubtitles[i], strSubDirectory, strSubFile);
+	for (unsigned int j=0; j < vecSubtitles.size(); j++)
+	{
+	  CUtil::Split(vecSubtitles[j], strIdxDirectory, strIdxFile);
+	  if ( CUtil::GetExtension(strIdxFile) == ".idx" &&
+	       CUtil::ReplaceExtension(strIdxFile,"").CompareNoCase( CUtil::ReplaceExtension(strSubFile,"") ) == 0 )
+	    isVobsub = true;
+	}
+      }
+      
+      if (!isVobsub)
+      {
+	CStdString strSubtitleFileName;
+	CStdString strDirectory;
+        
+        CUtil::Split(vecSubtitles[i], strDirectory, strSubtitleFileName);
+	CStdString strSubtitleFileNameNoExt(CUtil::ReplaceExtension(strSubtitleFileName, ""));
+	CStdString strSubtitleFileNameNoExtNoCase(strSubtitleFileNameNoExt);
+	strSubtitleFileNameNoExtNoCase.MakeLower();
+        
+	int lengthMovieFileName = strMovieFileNameNoExtNoCase.length();
+	int lengthSubtitleFileName = strSubtitleFileNameNoExtNoCase.length();
+	
+	CStreamDetailSubtitle *p = new CStreamDetailSubtitle();
+        
+	if ( lengthMovieFileName == lengthSubtitleFileName )
+        {
+	  p->m_strLanguage = "default";
+	}
+        else 
+        {
+	  CStdString strSubtitleLangTag( strSubtitleFileNameNoExtNoCase.Right( lengthSubtitleFileName - lengthMovieFileName -1 ) );
+	  CStdString langCode;
+	  if (g_LangCodeExpander.ConvertToStandardCode(langCode, strSubtitleLangTag) )
+	  {
+	    p->m_strLanguage = langCode;
+	  }
+	  else // could not determine iso639-2, add string as is
+	  {
+	    p->m_strLanguage = strSubtitleLangTag;
+	  }
+	}
+	details.AddStream(p);   
+	retVal = true;
+	CLog::Log(LOGDEBUG,"%s: added subtitle language '%s' to streamdetails", __FUNCTION__, p->m_strLanguage.c_str() );
+      }
+    }
+  }
+  
+  details.DetermineBestStreams();
+  return retVal;
+}

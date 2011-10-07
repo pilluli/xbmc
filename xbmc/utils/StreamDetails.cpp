@@ -23,6 +23,7 @@
 #include "StreamDetails.h"
 #include "StreamUtils.h"
 #include "Variant.h"
+#include "log.h"
 
 void CStreamDetail::Archive(CArchive &ar)
 {
@@ -506,3 +507,89 @@ CStdString CStreamDetails::VideoAspectToAspectDescription(float fAspect)
     return "2.20";
   return "2.35";
 }
+
+bool CStreamDetailVideo::operator==(const CStreamDetail &other) const
+{
+  if (other.m_eType != CStreamDetail::VIDEO)
+    return false;
+
+  bool streamsAreEqual = true;
+  streamsAreEqual = streamsAreEqual && this->m_strCodec == ((CStreamDetailVideo&) other).m_strCodec;
+  streamsAreEqual = streamsAreEqual && this->m_fAspect == ((CStreamDetailVideo&) other).m_fAspect;
+  streamsAreEqual = streamsAreEqual && this->m_iWidth == ((CStreamDetailVideo&) other).m_iWidth;
+  streamsAreEqual = streamsAreEqual && this->m_iHeight == ((CStreamDetailVideo&) other).m_iHeight;
+  streamsAreEqual = streamsAreEqual && this->m_iDuration == ((CStreamDetailVideo&) other).m_iDuration;
+  return streamsAreEqual;
+}
+
+bool CStreamDetailAudio::operator==(const CStreamDetail &other) const
+{
+  if (other.m_eType != CStreamDetail::AUDIO)
+    return false;
+
+  bool streamsAreEqual = true;
+  streamsAreEqual = streamsAreEqual && this->m_strCodec == ((CStreamDetailAudio&) other).m_strCodec;
+  streamsAreEqual = streamsAreEqual && this->m_strLanguage == ((CStreamDetailAudio&) other).m_strLanguage;
+  streamsAreEqual = streamsAreEqual && this->m_iChannels == ((CStreamDetailAudio&) other).m_iChannels;
+    return streamsAreEqual;
+}
+
+bool CStreamDetailSubtitle::operator==(const CStreamDetail &other) const 
+{ 
+  if (other.m_eType != CStreamDetail::SUBTITLE) 
+    return false;   
+  
+  return (this->m_strLanguage == ((CStreamDetailSubtitle&) other).m_strLanguage); 
+} 
+
+bool CStreamDetails::operator==(const CStreamDetails &other) const
+{               
+  int nStreams = m_vecItems.size();
+  int nStreamsOther = other.m_vecItems.size();
+ 
+  if (nStreams != nStreamsOther)
+    return false;
+ 
+  bool streamsAreEqual = true;
+  
+  std::vector<CStreamDetail *>::const_iterator iter;
+  std::vector<CStreamDetail *>::const_iterator iterOther;
+  for (iter = m_vecItems.begin(), iterOther = other.m_vecItems.begin(); iter != m_vecItems.end(); iter++, iterOther++)
+    streamsAreEqual = streamsAreEqual && ((**iter) == (**iterOther));    
+  
+  return streamsAreEqual;
+}
+
+bool CStreamDetails::operator!=(const CStreamDetails &other) const
+{       
+  return (!( *this == other));
+}
+
+void CStreamDetails::logStreamDetails()
+{               
+  std::vector<CStreamDetail *>::const_iterator iter;
+  for (iter = m_vecItems.begin(); iter != m_vecItems.end(); iter++)
+  {
+    switch ((*iter)->m_eType)
+    {
+      case CStreamDetail::VIDEO:
+	CLog::Log(LOGDEBUG, "%s - found video codec %s", __FUNCTION__, ((CStreamDetailVideo *) (*iter))->m_strCodec.c_str() );
+	CLog::Log(LOGDEBUG, "%s - found video aspect %f", __FUNCTION__, ((CStreamDetailVideo *) (*iter))->m_fAspect );
+	CLog::Log(LOGDEBUG, "%s - found video width %i", __FUNCTION__, ((CStreamDetailVideo *) (*iter))->m_iWidth );
+	CLog::Log(LOGDEBUG, "%s - found video height %i", __FUNCTION__, ((CStreamDetailVideo *) (*iter))->m_iHeight );
+	CLog::Log(LOGDEBUG, "%s - found video duration %i", __FUNCTION__, ((CStreamDetailVideo *) (*iter))->m_iDuration );
+	break;
+      case CStreamDetail::AUDIO:
+	CLog::Log(LOGDEBUG, "%s - found audio codec %s", __FUNCTION__, ((CStreamDetailAudio *) (*iter))->m_strCodec.c_str() );
+	CLog::Log(LOGDEBUG, "%s - found audio language %s", __FUNCTION__, ((CStreamDetailAudio *) (*iter))->m_strLanguage.c_str()  );
+	CLog::Log(LOGDEBUG, "%s - found audio channels %i", __FUNCTION__, ((CStreamDetailAudio *) (*iter))->m_iChannels  );
+	break;
+      case CStreamDetail::SUBTITLE:
+	CLog::Log(LOGDEBUG, "%s - found subtitle language %s", __FUNCTION__, ((CStreamDetailSubtitle *) (*iter))->m_strLanguage.c_str() );
+	break;
+      default:
+	CLog::Log(LOGERROR, "%s - should never reach default case", __FUNCTION__ );
+    }  /* switch type */
+  }  /* for each */     
+}
+ 

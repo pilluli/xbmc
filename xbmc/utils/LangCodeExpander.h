@@ -34,6 +34,8 @@ public:
 
   bool Lookup(CStdString& desc, const CStdString& code);
   bool Lookup(CStdString& desc, const int code);
+  bool ConvertToStandardCode(CStdString& strThreeCharCode, const CStdString& strLangOrCode); 
+  bool GetLanguageCode(CStdString& strLangCode, const CStdString& strLanguage, short numCharCode); 
 #ifdef _WIN32
   bool ConvertTwoToThreeCharCode(CStdString& strThreeCharCode, const CStdString& strTwoCharCode, bool localeHack = false);
 #else

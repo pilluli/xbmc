@@ -3807,17 +3807,16 @@ bool CApplication::PlayFile(const CFileItem& item, bool bRestart)
       {
         CVideoInfoTag *details = m_itemCurrentFile->GetVideoInfoTag();
         // Save information about the stream if we currently have no data
-        if (!details->HasStreamDetails() ||
-             details->m_streamDetails.GetVideoDuration() <= 0)
+        CStreamDetails oldStreamDetails = details->m_streamDetails; 
+	bool gotStreamDetails = m_pPlayer->GetStreamDetails(details->m_streamDetails); 
+	if ( gotStreamDetails &&  (oldStreamDetails != details->m_streamDetails ) ) 
         {
-          if (m_pPlayer->GetStreamDetails(details->m_streamDetails) && details->HasStreamDetails())
-          {
-            CVideoDatabase dbs;
-            dbs.Open();
-            dbs.SetStreamDetailsForFileId(details->m_streamDetails, details->m_iFileId);
-            dbs.Close();
-            CUtil::DeleteVideoDatabaseDirectoryCache();
-          }
+	  CLog::Log(LOGINFO, "%s - found updated stream information, saving to library", __FUNCTION__); 
+	  CVideoDatabase dbs; 
+	  dbs.Open(); 
+	  dbs.SetStreamDetailsForFileId(details->m_streamDetails, details->m_iFileId); 
+	  dbs.Close(); 
+	  CUtil::DeleteVideoDatabaseDirectoryCache(); 
         }
       }
     }

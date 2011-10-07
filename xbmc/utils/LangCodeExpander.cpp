@@ -142,6 +142,141 @@ bool CLangCodeExpander::Lookup(CStdString& desc, const int code)
   return Lookup(desc, lang);
 }
 
+bool CLangCodeExpander::ConvertToStandardCode(CStdString& strThreeCharCode, const CStdString& strLangOrCode) 
+{        
+  CStdString strLangOrCodeLower(strLangOrCode); 
+  strLangOrCodeLower.MakeLower(); 
+  strLangOrCodeLower.TrimLeft(); 
+  strLangOrCodeLower.TrimRight(); 
+
+  if (strLangOrCodeLower.size() == 2) 
+  { 
+    if ( ConvertTwoToThreeCharCode( strThreeCharCode, strLangOrCodeLower ) ) 
+    { 
+      return true; 
+    } 
+  } 
+     
+  if (strLangOrCodeLower.size() == 3) 
+  { 
+    for(unsigned int i = 0; i < sizeof(g_iso639_2) / sizeof(LCENTRY); i++) 
+    { 
+      CStdString name( g_iso639_2[i].name ); 
+      name.MakeLower(); 
+      if (strcmp(name, strLangOrCodeLower) == 0) 
+      { 
+        strThreeCharCode = strLangOrCodeLower; 
+	return true; 
+      } 
+    } 
+  }      
+  
+  // is it a language string found in the 3-char table?  
+  if ( GetLanguageCode(strThreeCharCode, strLangOrCodeLower, 3) ) 
+  { 
+    return true; 
+  } 
+     
+  // is it in the 2-char table? 
+  CStdString strTwoCharCode; 
+  if ( GetLanguageCode(strTwoCharCode, strLangOrCodeLower, 2) ) 
+  { 
+    if (ConvertTwoToThreeCharCode( strThreeCharCode, strTwoCharCode) ) 
+    { 
+      return true; 
+    } 
+  }      
+  
+  // it's probably a custom language code. try to look it up... 
+  CStdString strLanguage; 
+     
+  // test if language for the given string can be found (from user config or db) 
+  if( Lookup( strLanguage,  strLangOrCodeLower ) ) 
+  { 
+    
+    // is it a language string found in the 3-char table?        
+    if ( GetLanguageCode(strThreeCharCode, strLangOrCodeLower, 3) ) 
+    { 
+      return true; 
+    } 
+    
+    
+    // is it in the 2-char table? 
+    CStdString strTwoCharCode; 
+    if ( GetLanguageCode(strTwoCharCode, strLangOrCodeLower, 2) ) 
+    { 
+      if (ConvertTwoToThreeCharCode( strThreeCharCode, strTwoCharCode) ) 
+      { 
+        return true; 
+      } 
+    } 
+    // if it's in none of these tables, we cannot determine the iso language code 
+  } 
+  CLog::Log(LOGDEBUG,"%s: Could not determine standard language code for: %s", __FUNCTION__, strLangOrCode.c_str() ); 
+  
+  return false; 
+} 
+ 
+bool CLangCodeExpander::GetLanguageCode(CStdString& strLangCode, const CStdString& strLanguage, short numCharCode) 
+{ 
+  CStdString strLanguageLower( strLanguage ); 
+  strLanguageLower.MakeLower(); 
+  strLanguageLower.TrimLeft(); 
+  strLanguageLower.TrimRight(); 
+  
+  CSectionLoader::Load("LCODE"); 
+  
+  // standard three-char lang code 
+  if (numCharCode==3) 
+  { 
+    for(unsigned int i = 0; i < sizeof(g_iso639_2) / sizeof(LCENTRY); i++) 
+    { 
+      CStdString name( g_iso639_2[i].name ); 
+      name.MakeLower(); 
+      if (strcmp(name, strLanguageLower) == 0) 
+      { 
+	// convert to numerical code to string 
+	long code = g_iso639_2[i].code; 
+	CSectionLoader::Unload("LCODE"); 
+	
+	CStdString sCode( "123" ); 
+	long mask = 0xFF; 
+	sCode[2] = char (code & mask); 
+	sCode[1] = char ((code & (mask<<8))>>8); 
+	sCode[0] = char ((code & (mask<<16))>>16); 
+	strLangCode = sCode; 
+	
+	return true; 
+      } 
+    } 
+  } 
+  else if (numCharCode==2) 
+  { 
+    for(unsigned int i = 0; i < sizeof(g_iso639_1) / sizeof(LCENTRY); i++) 
+    { 
+      CStdString name( g_iso639_1[i].name ); 
+      name.MakeLower(); 
+      if (strcmp(name, strLanguageLower) == 0) 
+      { 
+	// convert to numerical code to string 
+	long code = g_iso639_2[i].code; 
+	CSectionLoader::Unload("LCODE"); 
+	
+	CStdString sCode( "12" ); 
+	long mask = 0xFF; 
+	sCode[1] = char (code & mask); 
+	sCode[0] = char ((code & (mask<<8))>>8); 
+	strLangCode = sCode; 
+	
+	return true; 
+      } 
+    } 
+  } 
+  CSectionLoader::Unload("LCODE"); 
+  
+  return false; 
+}
+
 #ifdef _WIN32
 bool CLangCodeExpander::ConvertTwoToThreeCharCode(CStdString& strThreeCharCode, const CStdString& strTwoCharCode, bool localeHack /*= false*/)
 #else
