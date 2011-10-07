@@ -1517,7 +1517,7 @@ bool CGUIMediaWindow::WaitForNetwork() const
 void CGUIMediaWindow::OnFilterItems(const CStdString &filter)
 {
   CStdString currentItem;
-  CStdString saved_path = this->GetProperty("saved_path");
+  CStdString saved_path = this->GetProperty("saved_path").asString();
   if(saved_path.IsEmpty())
   {
     int item = m_viewControl.GetSelectedItem();
