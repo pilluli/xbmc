@@ -29,6 +29,32 @@ class CStreamDetails;
 class IStreamDetailsObserver;
 
 /*!
+ \brief Files Availability checking classes
+*/
+class CAvailabilityChecker
+{
+public:
+  void virtual ResetCounter();
+  bool AnyChanges();
+  void virtual Check(CFileItem *pItem) = 0;
+
+protected:
+  void CompareUnavailibility(bool new_unavailability, CFileItem *pItem);
+  bool m_bAnyChanges;
+};
+
+class CVideoAvailabilityChecker : public CAvailabilityChecker
+{
+public:
+  void virtual ResetCounter();
+  void virtual Check(CFileItem *pItem);
+  bool JustOneSeason();
+protected:
+  bool m_bTvShowSeasons;
+  int m_iTvShowSeasonsAvail;
+};
+
+/*!
  \ingroup thumbs,jobs
  \brief Thumb extractor job class
 
@@ -102,6 +128,8 @@ public:
   virtual void OnJobComplete(unsigned int jobID, bool success, CJob *job);
 
 protected:
+  CVideoAvailabilityChecker m_AvailChecker; 
+
   virtual void OnLoaderStart() ;
   virtual void OnLoaderFinish() ;
 

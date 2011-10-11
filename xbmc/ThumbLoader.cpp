@@ -34,6 +34,8 @@
 #include "utils/log.h"
 #include "programs/Shortcut.h"
 #include "video/VideoInfoTag.h"
+#include "settings/Settings.h" 
+#include "settings/AdvancedSettings.h" 
 #include "video/VideoDatabase.h"
 #include "cores/dvdplayer/DVDFileInfo.h"
 
@@ -167,10 +169,62 @@ CVideoThumbLoader::~CVideoThumbLoader()
 
 void CVideoThumbLoader::OnLoaderStart()
 {
+  m_AvailChecker.ResetCounter(); 
 }
 
 void CVideoThumbLoader::OnLoaderFinish()
 {
+  if (m_AvailChecker.JustOneSeason())
+  {
+    int iFlatten = g_guiSettings.GetInt("videolibrary.flattentvshows");
+    if(g_settings.m_bMyVideoShowUnavailableMode)
+    {
+      if(iFlatten == 1)
+      {
+        for(int i = 0 ; i < this->m_pVecItems->Size() ; i++)
+        {
+          CFileItemPtr item = this->m_pVecItems->Get(i);
+          
+          if(item->GetVideoInfoTag()->m_iSeason > 0 && !item->GetProperty("unavailable").asBoolean())
+          {
+            // notify gui to refresh view
+            // modified GUI_MSG_UPDATE's Params2 handling:
+            // flags: +1 if want to use SetHistoryForPath
+            //        +2 if want to cheat a little and change view without changing navigation history
+            //           need to use it to trigger flatting tvshow when only one season is available
+            //           and keep GUI thinking that is in Season Navigation
+            CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0,0, GUI_MSG_UPDATE, 2);
+            msg.SetStringParam(item->GetPath());
+            g_windowManager.SendThreadMessage(msg);
+            m_AvailChecker.ResetCounter();
+            return;
+          }
+        }
+      }
+      else
+      {
+        // if flatting tvshows is disabled and hiding unavailable items enabled
+        for(int i = 0 ; i < this->m_pVecItems->Size() ; i++)
+        {
+          CFileItemPtr item = this->m_pVecItems->Get(i);
+          
+          if(item->GetVideoInfoTag()->m_iSeason == -1)
+          {
+            // 'removing' 'all episodes' from view when there is only 1 season available
+            item->SetProperty("unavailable", true);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (m_AvailChecker.AnyChanges())
+  {
+    CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0, 0, GUI_MSG_FILTER_ITEMS, 1);
+    g_windowManager.SendThreadMessage(msg);
+    m_AvailChecker.ResetCounter();
+  }
 }
 
 /**
@@ -181,6 +235,12 @@ void CVideoThumbLoader::OnLoaderFinish()
  */
 bool CVideoThumbLoader::LoadItem(CFileItem* pItem)
 {
+  // real file availability checking is done here - first lets check if user enabled this feature
+  if (g_guiSettings.GetBool("videolibrary.fileavailabilitychecking"))
+  {
+    m_AvailChecker.Check(pItem);
+  }
+
   if (pItem->m_bIsShareOrDrive
   ||  pItem->IsParentFolder())
     return false;
@@ -360,5 +420,90 @@ bool CMusicThumbLoader::LoadItem(CFileItem* pItem)
   else
     LoadRemoteThumb(pItem);
   return true;
+}
+
+void CAvailabilityChecker::CompareUnavailibility(bool new_unavailability, CFileItem *pItem)
+{
+  if (new_unavailability != pItem->GetProperty("unavailable").asBoolean())
+  {
+    pItem->SetProperty("unavailable", new_unavailability);
+    this->m_bAnyChanges = true;
+  }
+}
+
+bool CAvailabilityChecker::AnyChanges()
+{
+  return this->m_bAnyChanges;
+}
+
+void CAvailabilityChecker::ResetCounter()
+{
+  this->m_bAnyChanges = false;
+}
+
+void CVideoAvailabilityChecker::ResetCounter()
+{
+  this->m_bAnyChanges = false;
+  this->m_iTvShowSeasonsAvail = 0;
+  this->m_bTvShowSeasons = false;
+}
+
+void CVideoAvailabilityChecker::Check(CFileItem *pItem)
+{
+  if (pItem->m_bIsFolder)
+  {
+    // just tvshows now
+    CVideoInfoTag *tag = pItem->GetVideoInfoTag();
+    if (tag->m_iEpisode > 0)
+    {
+      //if episode count > 0 then we identify item as tvshow or tvshow season
+      CVideoDatabase dbs;
+      dbs.Open();
+      std::vector<CStdString> episodelist;
+      if (tag->m_iSeason > -1)
+      {
+        m_bTvShowSeasons = true;
+        //if season number > -1 we identify item as tvshow season
+        if (g_advancedSettings.m_bVideoLibraryAvailabilityCheckingByFile)
+          dbs.GetFileNamesForSeason(tag->m_iDbId, tag->m_iSeason, episodelist);
+        else
+          dbs.GetPathsForSeason(tag->m_iDbId, tag->m_iSeason, episodelist);
+      }
+      else
+      {
+        //if season number == -1 we identify item as tvshow
+        if (g_advancedSettings.m_bVideoLibraryAvailabilityCheckingByFile)
+          dbs.GetFileNamesForTvShow(tag->m_iDbId, episodelist);
+        else
+          dbs.GetPathsForTvShow(tag->m_iDbId, episodelist);
+      }
+      dbs.Close();
+
+      bool unavailable = true;
+      for (unsigned int i = 0 ; i < episodelist.size();i++)
+      {
+        CFileItem fs_item(episodelist[i], !g_advancedSettings.m_bVideoLibraryAvailabilityCheckingByFile);
+        if (fs_item.Exists(false))
+        {
+          unavailable = false;
+          break;
+        }
+      }
+      CompareUnavailibility(unavailable, pItem);
+
+      if(this->m_bTvShowSeasons && !unavailable)
+        this->m_iTvShowSeasonsAvail++;
+    } // closing bracket if(tag->m_iEpisode > 0)
+  } // closing bracket if(pItem->m_bIsFolder)
+  else
+  {
+    //it's eiter tvshow's episode or movie
+    CompareUnavailibility(!pItem->Exists(false), pItem);
+  }
+}
+
+bool CVideoAvailabilityChecker::JustOneSeason()
+{
+  return ( this->m_bTvShowSeasons && this->m_iTvShowSeasonsAvail < 2 );
 }
 

@@ -73,6 +73,8 @@ using namespace std;
 #define CONTROL_BTNFLATTEN        17
 #define CONTROL_LABELEMPTY        18
 
+#define CONTROL_BTNHIDEUNAVAILABLE 296
+
 CGUIWindowVideoNav::CGUIWindowVideoNav(void)
     : CGUIWindowVideoBase(WINDOW_VIDEO_NAV, "MyVideoNav.xml")
 {
@@ -194,6 +196,13 @@ bool CGUIWindowVideoNav::OnMessage(CGUIMessage& message)
         //       of actual videos?
         Update(m_vecItems->GetPath());
         return true;
+      }
+      else if (iControl == CONTROL_BTNHIDEUNAVAILABLE)
+      {
+        g_settings.m_bMyVideoShowUnavailableMode = !g_settings.m_bMyVideoShowUnavailableMode;
+        g_settings.Save(); 
+        Update(m_vecItems->GetPath()); 
+        return true; 
       }
     }
     break;
@@ -546,6 +555,8 @@ void CGUIWindowVideoNav::UpdateButtons()
   SET_CONTROL_SELECTED(GetID(),CONTROL_BTNPARTYMODE, g_partyModeManager.IsEnabled());
 
   SET_CONTROL_SELECTED(GetID(),CONTROL_BTNFLATTEN, g_settings.m_bMyVideoNavFlatten);
+
+  SET_CONTROL_SELECTED(GetID(), CONTROL_BTNHIDEUNAVAILABLE, g_settings.m_bMyVideoShowUnavailableMode);
 }
 
 /// \brief Search for names, genres, artists, directors, and plots with search string \e strSearch in the
