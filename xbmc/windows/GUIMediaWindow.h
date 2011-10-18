@@ -95,7 +95,7 @@ protected:
   void GetFilteredUnavailableItems(CFileItemList &items); 
 
   // check for a disc or connection
-  virtual bool HaveDiscOrConnection(int iDriveType);
+  virtual bool HaveDiscOrConnection(const CStdString& strPath, int iDriveType);
   void ShowShareErrorMessage(CFileItem* pItem);
 
   void GetDirectoryHistoryString(const CFileItem* pItem, CStdString& strHistoryString);
