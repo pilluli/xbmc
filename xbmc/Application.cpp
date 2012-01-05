@@ -331,12 +331,16 @@ using namespace XbmcThreads;
 #define MAX_FFWD_SPEED 5
 
 //extern IDirectSoundRenderer* m_pAudioDecoder;
-CApplication::CApplication(void) : m_itemCurrentFile(new CFileItem), m_progressTrackingItem(new CFileItem)
-  , m_progressTrackingVideoResumeBookmark(*new CBookmark)
+CApplication::CApplication(void)
+  : m_pPlayer(NULL)
+#ifdef HAS_WEB_SERVER
   , m_WebServer(*new CWebServer)
+#endif
+  , m_itemCurrentFile(new CFileItem)
+  , m_progressTrackingVideoResumeBookmark(*new CBookmark)
+  , m_progressTrackingItem(new CFileItem)
 {
   m_iPlaySpeed = 1;
-  m_pPlayer = NULL;
   m_bScreenSave = false;
   m_dpms = NULL;
   m_dpmsIsActive = false;
@@ -371,14 +375,20 @@ CApplication::CApplication(void) : m_itemCurrentFile(new CFileItem), m_progressT
   m_bEnableLegacyRes = false;
   m_bSystemScreenSaverEnable = false;
   m_pInertialScrollingHandler = new CInertialScrollingHandler();
+#ifdef HAS_DVD_DRIVE
   m_Autorun = new CAutorun();
+#endif
 }
 
 CApplication::~CApplication(void)
 {
+#ifdef HAS_WEB_SERVER
   delete &m_WebServer;
+#endif
   delete &m_progressTrackingVideoResumeBookmark;
+#ifdef HAS_DVD_DRIVE
   delete m_Autorun;
+#endif
   delete m_currentStack;
 
 #ifdef HAS_KARAOKE
@@ -419,6 +429,9 @@ bool CApplication::OnEvent(XBMC_Event& newEvent)
         g_guiSettings.SetInt("window.height", newEvent.resize.h);
         g_settings.Save();
       }
+      break;
+    case XBMC_VIDEOMOVE:
+      g_Windowing.OnMove(newEvent.move.x, newEvent.move.y);
       break;
     case XBMC_USEREVENT:
       g_application.getApplicationMessenger().UserEvent(newEvent.user.code);
@@ -1167,7 +1180,12 @@ bool CApplication::Initialize()
   if (g_settings.UsingLoginScreen())
     g_windowManager.ActivateWindow(WINDOW_LOGIN_SCREEN);
   else
+  {
+#ifdef HAS_JSONRPC
+    CJSONRPC::Initialize();
+#endif
     g_windowManager.ActivateWindow(g_SkinInfo->GetFirstWindow());
+  }
 
   g_sysinfo.Refresh();
 
@@ -1190,7 +1208,7 @@ bool CApplication::Initialize()
   {
     UpdateLibraries();
 #ifdef HAS_PYTHON
-  g_pythonParser.m_bLogin = true;
+    g_pythonParser.m_bLogin = true;
 #endif
   }
 
@@ -1201,10 +1219,6 @@ bool CApplication::Initialize()
 #endif
 #if defined(HAVE_LIBCRYSTALHD)
   CCrystalHD::GetInstance();
-#endif
-
-#ifdef HAS_JSONRPC
-  CJSONRPC::Initialize();
 #endif
 
   CAddonMgr::Get().StartServices(false);
@@ -1240,13 +1254,13 @@ bool CApplication::StartWebServer()
       started = true;
       // publish web frontend and API services
 #ifdef HAS_WEB_INTERFACE
-      CZeroconf::GetInstance()->PublishService("servers.webserver", "_http._tcp", "XBMC Web Server", webPort, txt);
+      CZeroconf::GetInstance()->PublishService("servers.webserver", "_http._tcp", g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME), webPort, txt);
 #endif
 #ifdef HAS_HTTPAPI
-      CZeroconf::GetInstance()->PublishService("servers.webapi", "_xbmc-web._tcp", "XBMC HTTP API", webPort, txt);
+      CZeroconf::GetInstance()->PublishService("servers.webapi", "_xbmc-web._tcp", g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME), webPort, txt);
 #endif
 #ifdef HAS_JSONRPC
-      CZeroconf::GetInstance()->PublishService("servers.webjsonrpc", "_xbmc-jsonrpc._tcp", "XBMC JSONRPC", webPort, txt);
+      CZeroconf::GetInstance()->PublishService("servers.webjsonrpc", "_xbmc-jsonrpc._tcp", g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME), webPort, txt);
 #endif
     }
 #ifdef HAS_HTTPAPI
@@ -1343,7 +1357,7 @@ bool CApplication::StartJSONRPCServer()
     if (CTCPServer::StartServer(g_advancedSettings.m_jsonTcpPort, g_guiSettings.GetBool("services.esallinterfaces")))
     {
       std::map<std::string, std::string> txt;  
-      CZeroconf::GetInstance()->PublishService("servers.jsonrpc", "_xbmc-jsonrpc._tcp", "XBMC JSONRPC", g_advancedSettings.m_jsonTcpPort, txt);
+      CZeroconf::GetInstance()->PublishService("servers.jsonrpc", "_xbmc-jsonrpc._tcp", g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME), g_advancedSettings.m_jsonTcpPort, txt);
       return true;
     }
     else
@@ -4172,6 +4186,12 @@ void CApplication::StopPlaying()
 
     g_partyModeManager.Disable();
   }
+}
+
+void CApplication::ResetSystemIdleTimer()
+{
+  // reset system idle timer
+  m_idleTimer.StartZero();
 }
 
 void CApplication::ResetScreenSaver()

@@ -172,6 +172,7 @@ public:
   int GetSubtitleDelay() const;
   int GetAudioDelay() const;
   void SetPlaySpeed(int iSpeed);
+  void ResetSystemIdleTimer();
   void ResetScreenSaverTimer();
   void StopScreenSaverTimer();
   // Wakes up from the screensaver and / or DPMS. Returns true if woken up.
@@ -219,11 +220,11 @@ public:
   MEDIA_DETECT::CDetectDVDMedia m_DetectDVDType;
 #endif
 
+  IPlayer* m_pPlayer;
+
 #ifdef HAS_WEB_SERVER
   CWebServer& m_WebServer;
 #endif
-
-  IPlayer* m_pPlayer;
 
   inline bool IsInScreenSaver() { return m_bScreenSave; };
   int m_iScreenSaveLock; // spiff: are we checking for a lock? if so, ignore the screensaver state, if -1 we have failed to input locks
