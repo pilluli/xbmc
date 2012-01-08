@@ -431,7 +431,20 @@ bool CApplication::OnEvent(XBMC_Event& newEvent)
       }
       break;
     case XBMC_VIDEOMOVE:
-      g_Windowing.OnMove(newEvent.move.x, newEvent.move.y);
+      if (g_advancedSettings.m_fullScreen)
+      {
+        // when fullscreen, remain fullscreen and resize to the dimensions of the new screen
+        RESOLUTION newRes = (RESOLUTION) g_Windowing.DesktopResolution(g_Windowing.GetCurrentScreen());
+        if (newRes != g_graphicsContext.GetVideoResolution())
+        {
+          g_guiSettings.SetResolution(newRes);
+          g_graphicsContext.SetVideoResolution(newRes);
+        }
+      }
+      else
+      {
+        g_Windowing.OnMove(newEvent.move.x, newEvent.move.y);
+      }
       break;
     case XBMC_USEREVENT:
       g_application.getApplicationMessenger().UserEvent(newEvent.user.code);
@@ -1318,7 +1331,7 @@ void CApplication::StartAirplayServer()
       }
       txt["features"] = "0x77";
       txt["model"] = "AppleTV2,1";
-      txt["srcvers"] = "101.28";
+      txt["srcvers"] = AIRPLAY_SERVER_VERSION_STR;
       CZeroconf::GetInstance()->PublishService("servers.airplay", "_airplay._tcp", g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME), listenPort, txt);
     }
   }
