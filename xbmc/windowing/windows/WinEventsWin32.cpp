@@ -39,6 +39,8 @@
 #include "settings/Settings.h"
 #include "settings/AdvancedSettings.h"
 #include "peripherals/Peripherals.h"
+#include "storage/DetectDVDType.h"
+#include "utils/JobManager.h"
 
 #ifdef _WIN32
 
@@ -601,14 +603,23 @@ LRESULT CALLBACK CWinEventsWin32::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
       newEvent.type = XBMC_VIDEORESIZE;
       newEvent.resize.w = GET_X_LPARAM(lParam);
       newEvent.resize.h = GET_Y_LPARAM(lParam);
-      if (newEvent.resize.w * newEvent.resize.h)
+
+      CLog::Log(LOGDEBUG, __FUNCTION__": window resize event");
+
+      if (!g_Windowing.IsAlteringWindow() && newEvent.resize.w > 0 && newEvent.resize.h > 0)
         m_pEventFunc(newEvent);
+
       return(0);
     case WM_MOVE:
       newEvent.type = XBMC_VIDEOMOVE;
       newEvent.move.x = GET_X_LPARAM(lParam);
       newEvent.move.y = GET_Y_LPARAM(lParam);
-      m_pEventFunc(newEvent);
+
+      CLog::Log(LOGDEBUG, __FUNCTION__": window move event");
+
+      if (!g_Windowing.IsAlteringWindow())
+        m_pEventFunc(newEvent);
+
       return(0);
     case WM_MEDIA_CHANGE:
       {
@@ -631,7 +642,10 @@ LRESULT CALLBACK CWinEventsWin32::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             case SHCNE_MEDIAINSERTED:
               CLog::Log(LOGDEBUG, __FUNCTION__": Drive %s Media has arrived.", drivePath);
               if (GetDriveType(drivePath) == DRIVE_CDROM)
-                g_application.getApplicationMessenger().OpticalMount(drivePath, true);
+              {
+                CDetectDisc* discdetection = new CDetectDisc(drivePath, true);
+                CJobManager::GetInstance().AddJob(discdetection, NULL);
+              }
               else
                 CWin32StorageProvider::SetEvent();
               break;
@@ -640,7 +654,12 @@ LRESULT CALLBACK CWinEventsWin32::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             case SHCNE_MEDIAREMOVED:
               CLog::Log(LOGDEBUG, __FUNCTION__": Drive %s Media was removed.", drivePath);
               if (GetDriveType(drivePath) == DRIVE_CDROM)
-                g_application.getApplicationMessenger().OpticalUnMount(drivePath);
+              {
+                CMediaSource share;
+                share.strPath = drivePath;
+                share.strName = share.strPath;
+                g_mediaManager.RemoveAutoSource(share);
+              }
               else
                 CWin32StorageProvider::SetEvent();
               break;
