@@ -337,6 +337,35 @@ void CXBMCRenderManager::UnInit()
     m_pRenderer->UnInit();
 }
 
+bool CXBMCRenderManager::Flush()
+{
+  if (!m_pRenderer)
+    return true;
+
+  if (g_application.IsCurrentThread())
+  {
+    CLog::Log(LOGDEBUG, "%s - flushing renderer", __FUNCTION__);
+
+    CRetakeLock<CExclusiveLock> lock(m_sharedSection);
+    m_pRenderer->Flush();
+    m_flushEvent.Set();
+  }
+  else
+  {
+    ThreadMessage msg = {TMSG_RENDERER_FLUSH};
+    m_flushEvent.Reset();
+    g_application.getApplicationMessenger().SendMessage(msg, false);
+    if (!m_flushEvent.WaitMSec(1000))
+    {
+      CLog::Log(LOGERROR, "%s - timed out waiting for renderer to flush", __FUNCTION__);
+      return false;
+    }
+    else
+      return true;
+  }
+  return true;
+}
+
 void CXBMCRenderManager::SetupScreenshot()
 {
   CSharedLock lock(m_sharedSection);
@@ -511,9 +540,7 @@ void CXBMCRenderManager::FlipPage(volatile bool& bStop, double timestamp /* = 0L
     m_presentstep  = PRESENT_FLIP;
     m_presentsource = source;
     EDEINTERLACEMODE deinterlacemode = g_settings.m_currentVideoSettings.m_DeinterlaceMode;
-    EINTERLACEMETHOD interlacemethod = g_settings.m_currentVideoSettings.m_InterlaceMethod;
-    if (interlacemethod == VS_INTERLACEMETHOD_AUTO)
-      interlacemethod = m_pRenderer->AutoInterlaceMethod();
+    EINTERLACEMETHOD interlacemethod = AutoInterlaceMethodInternal(g_settings.m_currentVideoSettings.m_InterlaceMethod);
 
     bool invert = false;
 
@@ -753,4 +780,18 @@ int CXBMCRenderManager::AddVideoPicture(DVDVideoPicture& pic)
   m_pRenderer->ReleaseImage(index, false);
 
   return index;
+}
+
+EINTERLACEMETHOD CXBMCRenderManager::AutoInterlaceMethodInternal(EINTERLACEMETHOD mInt)
+{
+  if (mInt == VS_INTERLACEMETHOD_NONE)
+    return VS_INTERLACEMETHOD_NONE;
+
+  if(!m_pRenderer->Supports(mInt))
+    mInt = VS_INTERLACEMETHOD_AUTO;
+
+  if (mInt == VS_INTERLACEMETHOD_AUTO)
+    return m_pRenderer->AutoInterlaceMethod();
+
+  return mInt;
 }

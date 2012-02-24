@@ -552,7 +552,10 @@ void CDVDPlayerAudio::Process()
 
       // Flush as the audio output may keep looping if we don't
       if(m_speed == DVD_PLAYSPEED_NORMAL)
+      {
+        m_dvdAudio.Drain();
         m_dvdAudio.Flush();
+      }
 
       continue;
     }
@@ -904,7 +907,7 @@ string CDVDPlayerAudio::GetPlayerInfo()
   if (m_synctype == SYNC_RESAMPLE)
     s << ", rr:" << fixed << setprecision(5) << 1.0 / m_resampleratio;
 
-  s << ", att:" << fixed << setprecision(1) << log(GetCurrentAttenuation()) * 10.0f << " dB";
+  s << ", att:" << fixed << setprecision(1) << log(GetCurrentAttenuation()) * 20.0f << " dB";
 
   return s.str();
 }

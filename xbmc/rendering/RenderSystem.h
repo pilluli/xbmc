@@ -58,6 +58,7 @@ enum
 {
   RENDER_QUIRKS_MAJORMEMLEAK_OVERLAYRENDERER = 1 << 0,
   RENDER_QUIRKS_YV12_PREFERED                = 1 << 1,
+  RENDER_QUIRKS_BROKEN_OCCLUSION_QUERY       = 1 << 2,
 };
 
 class CRenderSystemBase
@@ -96,6 +97,11 @@ public:
   virtual void RestoreHardwareTransform() = 0;
 
   virtual bool TestRender() = 0;
+
+  /**
+   * Project (x,y,z) 3d scene coordinates to (x,y) 2d screen coordinates
+   */
+  virtual void Project(float &x, float &y, float &z) { }
 
   void GetRenderVersion(unsigned int& major, unsigned int& minor) const;
   const CStdString& GetRenderVendor() const { return m_RenderVendor; }

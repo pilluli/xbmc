@@ -62,10 +62,15 @@ namespace PERIPHERALS
     PERIPHERAL_TUNER
   };
 
+  struct PeripheralID
+  {
+    int m_iVendorId;
+    int m_iProductId;
+  };
+
   struct PeripheralDeviceMapping
   {
-    int                              m_iVendorId;
-    int                              m_iProductId;
+    std::vector<PeripheralID>        m_PeripheralID;
     PeripheralBusType                m_busType;
     PeripheralType                   m_class;
     CStdString                       m_strDeviceName;
@@ -155,16 +160,14 @@ namespace PERIPHERALS
       return iVal;
     };
 
-    static char *IntToHexString(int iVal)
+    static void FormatHexString(int iVal, CStdString &strHexString)
     {
       if (iVal < 0)
         iVal = 0;
       if (iVal > 65536)
         iVal = 65536;
 
-      char *buf = new char[4];
-      sprintf(buf, "%04X", iVal);
-      return buf;
+      strHexString.Format("%04X", iVal);
     };
   };
 }

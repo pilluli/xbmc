@@ -40,14 +40,10 @@ CPeripheralBusUSB::CPeripheralBusUSB(CPeripherals *manager) :
 
 bool CPeripheralBusUSB::PerformDeviceScan(PeripheralScanResults &results)
 {
-  bool bReturn(true);
-
-  /* add device scans for non-generic devices here */
-
-  bReturn |= PerformDeviceScan(&USB_HID_GUID, PERIPHERAL_HID, results);
-  bReturn |= PerformDeviceScan(&USB_DISK_GUID, PERIPHERAL_DISK, results);
-
-  return bReturn;
+  /* XXX we'll just scan the RAW guid and find all devices. they'll show up as type 'unknown' in the UI,
+     but the other option is that they're detected more than once, because RAW will return all devices.
+     we have to scan the RAW guid here, because not every device is found by it's GUID correctly, e.g. CDC adapters. */
+  return PerformDeviceScan(&USB_RAW_GUID, PERIPHERAL_UNKNOWN, results);
 }
 
 bool CPeripheralBusUSB::PerformDeviceScan(const GUID *guid, const PeripheralType type, PeripheralScanResults &results)
@@ -112,14 +108,11 @@ bool CPeripheralBusUSB::PerformDeviceScan(const GUID *guid, const PeripheralType
 
     CStdString strVendorId(StringUtils::EmptyString);
     CStdString strProductId(StringUtils::EmptyString);
-    if (type == PERIPHERAL_HID)
-    {
-      CStdString strTmp(devicedetailData->DevicePath);
-      strVendorId = strTmp.substr(strTmp.Find("vid_") + 4, 4);
-      strProductId = strTmp.substr(strTmp.Find("pid_") + 4, 4);
-      if (strTmp.Find("&mi_") >= 0 && strTmp.Find("&mi_00") < 0)
-        continue;
-    }
+    CStdString strTmp(devicedetailData->DevicePath);
+    strVendorId = strTmp.substr(strTmp.Find("vid_") + 4, 4);
+    strProductId = strTmp.substr(strTmp.Find("pid_") + 4, 4);
+    if (strTmp.Find("&mi_") >= 0 && strTmp.Find("&mi_00") < 0)
+      continue;
 
     PeripheralScanResult prevDevice;
     if (!results.GetDeviceOnLocation(devicedetailData->DevicePath, &prevDevice))
@@ -130,7 +123,8 @@ bool CPeripheralBusUSB::PerformDeviceScan(const GUID *guid, const PeripheralType
       result.m_iVendorId    = PeripheralTypeTranslator::HexStringToInt(strVendorId.c_str());
       result.m_iProductId   = PeripheralTypeTranslator::HexStringToInt(strProductId.c_str());
 
-      results.m_results.push_back(result);
+      if (!results.ContainsResult(result))
+        results.m_results.push_back(result);
     }
   }
 

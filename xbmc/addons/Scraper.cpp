@@ -356,14 +356,23 @@ bool CScraper::Load()
         continue;
       }  
       AddonPtr dep;
-      if (!CAddonMgr::Get().GetAddon((*itr).first, dep))
+
+      bool bOptional = itr->second.second;
+
+      if (CAddonMgr::Get().GetAddon((*itr).first, dep))
       {
-        result = false;
-        break;
+        TiXmlDocument doc;
+        if (dep->Type() == ADDON_SCRAPER_LIBRARY && doc.LoadFile(dep->LibPath()))
+          m_parser.AddDocument(&doc);
       }
-      TiXmlDocument doc;
-      if (dep->Type() == ADDON_SCRAPER_LIBRARY && doc.LoadFile(dep->LibPath()))
-        m_parser.AddDocument(&doc);
+      else
+      {
+        if (!bOptional)
+        {
+          result = false;
+          break;
+        }
+      }
       itr++;
     }
   }
@@ -468,14 +477,15 @@ std::vector<CScraperUrl> CScraper::FindMovie(XFILE::CFileCurl &fcurl, const CStd
   CStdString sTitle, sTitleYear, sYear;
   CUtil::CleanString(sMovie, sTitle, sTitleYear, sYear, true/*fRemoveExt*/, fFirst);
 
+  if (!fFirst || Content() == CONTENT_MUSICVIDEOS)
+    sTitle.Replace("-"," ");
+
   CLog::Log(LOGDEBUG, "%s: Searching for '%s' using %s scraper "
     "(path: '%s', content: '%s', version: '%s')", __FUNCTION__, sTitle.c_str(),
     Name().c_str(), Path().c_str(),
     ADDON::TranslateContent(Content()).c_str(), Version().c_str());
 
   sTitle.ToLower();
-  if (Content() == CONTENT_MUSICVIDEOS)
-    sTitle.Replace("-"," ");
 
   vector<CStdString> vcsIn(1);
   g_charsetConverter.utf8To(SearchStringEncoding(), sTitle, vcsIn[0]);
@@ -578,7 +588,7 @@ std::vector<CScraperUrl> CScraper::FindMovie(XFILE::CFileCurl &fcurl, const CStd
     throw CScraperError();  // scraper aborted
 
   if (fSort)
-    std::sort(vcscurl.begin(), vcscurl.end(), RelevanceSortFunction);
+    std::stable_sort(vcscurl.begin(), vcscurl.end(), RelevanceSortFunction);
 
   return vcscurl;
 }
@@ -657,6 +667,9 @@ std::vector<CMusicAlbumInfo> CScraper::FindAlbum(CFileCurl &fcurl, const CStdStr
         for ( ; pxeLink && pxeLink->FirstChild(); pxeLink = pxeLink->NextSiblingElement("url"))
           scurlAlbum.ParseElement(pxeLink);
 
+        if (!scurlAlbum.m_url.size())
+          continue;
+
         CMusicAlbumInfo ali(sTitle, sArtist, sAlbumName, scurlAlbum);
 
         TiXmlElement* pxeRel = pxeAlbum->FirstChildElement("relevance");
@@ -734,6 +747,9 @@ std::vector<CMusicArtistInfo> CScraper::FindArtist(CFileCurl &fcurl,
           scurlArtist.ParseString(scurl.m_xml);
         for ( ; pxeLink && pxeLink->FirstChild(); pxeLink = pxeLink->NextSiblingElement("url"))
           scurlArtist.ParseElement(pxeLink);
+
+        if (!scurlArtist.m_url.size())
+          continue;
 
         CMusicArtistInfo ari(pxnTitle->FirstChild()->Value(), scurlArtist);
         XMLUtils::GetString(pxeArtist, "genre", ari.GetArtist().strGenre);
@@ -898,6 +914,9 @@ bool CScraper::GetAlbumDetails(CFileCurl &fcurl, const CScraperUrl &scurl, CAlbu
 bool CScraper::GetArtistDetails(CFileCurl &fcurl, const CScraperUrl &scurl,
   const CStdString &sSearch, CArtist &artist)
 {
+  if (!scurl.m_url.size())
+    return false;
+
   CLog::Log(LOGDEBUG, "%s: Reading '%s' ('%s') using %s scraper "
     "(file: '%s', content: '%s', version: '%s')", __FUNCTION__,
     scurl.m_url[0].m_url.c_str(), sSearch.c_str(), Name().c_str(), Path().c_str(),

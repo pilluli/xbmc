@@ -183,7 +183,7 @@ namespace INFO
 #define NETWORK_MAC_ADDRESS         191
 #define NETWORK_IS_DHCP             192
 #define NETWORK_LINK_STATE          193
-#define NETWORK_SUBNET_ADDRESS      194
+#define NETWORK_SUBNET_MASK         194
 #define NETWORK_GATEWAY_ADDRESS     195
 #define NETWORK_DNS1_ADDRESS        196
 #define NETWORK_DNS2_ADDRESS        197
@@ -372,6 +372,7 @@ namespace INFO
 #define SYSTEM_BATTERY_LEVEL        714
 #define SYSTEM_IDLE_TIME            715
 #define SYSTEM_FRIENDLY_NAME        716
+#define SYSTEM_SCREENSAVER_ACTIVE   717
 
 #define LIBRARY_HAS_MUSIC           720
 #define LIBRARY_HAS_VIDEO           721
@@ -386,6 +387,9 @@ namespace INFO
 #define SYSTEM_PLATFORM_LINUX       741
 #define SYSTEM_PLATFORM_WINDOWS     742
 #define SYSTEM_PLATFORM_OSX         743
+#define SYSTEM_PLATFORM_DARWIN_OSX  744
+#define SYSTEM_PLATFORM_DARWIN_IOS  745
+#define SYSTEM_PLATFORM_DARWIN_ATV2 746
 
 #define SYSTEM_CAN_POWERDOWN        750
 #define SYSTEM_CAN_SUSPEND          751
@@ -420,7 +424,7 @@ namespace INFO
 
 #define VERSION_MAJOR 11
 #define VERSION_MINOR 0
-#define VERSION_TAG "PRE-"
+#define VERSION_TAG "-PRE"
 
 #define LISTITEM_START              35000
 #define LISTITEM_THUMB              (LISTITEM_START)
@@ -676,9 +680,9 @@ public:
 
   int TranslateSingleString(const CStdString &strCondition);
 
-  int RegisterSkinVariableString(const INFO::CSkinVariableString& info);
-  int TranslateSkinVariableString(const CStdString& name);
-  CStdString GetSkinVariableString(int info, int contextWindow, bool preferImage = false, const CGUIListItem *item=NULL);
+  int RegisterSkinVariableString(const INFO::CSkinVariableString* info);
+  int TranslateSkinVariableString(const CStdString& name, int context);
+  CStdString GetSkinVariableString(int info, bool preferImage = false, const CGUIListItem *item=NULL);
 protected:
   friend class INFO::InfoSingle;
   bool GetBool(int condition, int contextWindow = 0, const CGUIListItem *item=NULL);

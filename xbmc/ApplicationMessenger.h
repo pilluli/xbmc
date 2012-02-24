@@ -75,6 +75,8 @@ class CGUIWindow;
 #define TMSG_SWITCHTOFULLSCREEN   308
 #define TMSG_MINIMIZE             309
 #define TMSG_TOGGLEFULLSCREEN     310
+#define TMSG_SETLANGUAGE          311
+#define TMSG_RENDERER_FLUSH       312
 
 #define TMSG_HTTPAPI              400
 
@@ -89,12 +91,10 @@ class CGUIWindow;
 #define TMSG_GUI_INFOLABEL            608
 #define TMSG_GUI_INFOBOOL             609
 
-#define TMSG_OPTICAL_MOUNT        700
-#define TMSG_OPTICAL_UNMOUNT      701
-
 #define TMSG_CALLBACK             800
 
 #define TMSG_VOLUME_SHOW          900
+#define TMSG_SPLASH_MESSAGE       901
 
 typedef struct
 {
@@ -141,6 +141,7 @@ public:
   void MediaPlay(std::string filename);
   void MediaPlay(const CFileItem &item);
   void MediaPlay(const CFileItemList &item, int song = 0);
+  void MediaPlay(int playlistid, int song = -1);
   void MediaStop();
   void MediaPause();
   void MediaRestart(bool bWait);
@@ -164,6 +165,7 @@ public:
   void PlayFile(const CFileItem &item, bool bRestart = false); // thread safe version of g_application.PlayFile()
   void PictureShow(std::string filename);
   void PictureSlideShow(std::string pathname, bool bScreensaver = false, bool addTBN = false);
+  void SetGUILanguage(const std::string &strLanguage);
   void Shutdown();
   void Powerdown();
   void Quit();
@@ -192,10 +194,10 @@ public:
   std::vector<CStdString> GetInfoLabels(const std::vector<CStdString> &properties);
   std::vector<bool> GetInfoBooleans(const std::vector<CStdString> &properties);
 
-  void OpticalMount(CStdString device, bool bautorun=false);
-  void OpticalUnMount(CStdString device);
-
   void ShowVolumeBar(bool up);
+
+  void SetSplashMessage(const CStdString& message);
+  void SetSplashMessage(int stringID);
 
 private:
   void ProcessMessage(ThreadMessage *pMsg);

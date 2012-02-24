@@ -223,7 +223,7 @@ CStdString CUtil::GetTitleFromPath(const CStdString& strFileNameAndPath, bool bI
   else if (path.Left(24).Equals("special://videoplaylists"))
     strFilename = g_localizeStrings.Get(136);
 
-  else if ((url.GetProtocol() == "rar" || url.GetProtocol() == "zip") && strFilename.IsEmpty())
+  else if (URIUtils::ProtocolHasParentInHostname(url.GetProtocol()) && strFilename.IsEmpty())
     strFilename = URIUtils::GetFileName(url.GetHostName());
 
   // now remove the extension if needed
@@ -407,12 +407,12 @@ void CUtil::GetQualifiedFilename(const CStdString &strBasePath, CStdString &strF
   if (!plItemUrl.GetProtocol().IsEmpty())
     return;
 
-  // If the filename starts "x:" or "/" it's already fully qualified so return
+  // If the filename starts "x:", "\\" or "/" it's already fully qualified so return
   if (strFilename.size() > 1)
 #ifdef _LINUX
     if ( (strFilename[1] == ':') || (strFilename[0] == '/') )
 #else
-    if ( strFilename[1] == ':' )
+    if ( strFilename[1] == ':' || (strFilename[0] == '\\' && strFilename[1] == '\\'))
 #endif
       return;
 
@@ -739,6 +739,24 @@ void CUtil::ClearSubtitles()
   }
 }
 
+void CUtil::ClearTempFonts()
+{
+  CStdString searchPath = "special://temp/fonts/";
+
+  if (!CFile::Exists(searchPath))
+    return;
+
+  CFileItemList items;
+  CDirectory::GetDirectory(searchPath, items, "", false, false, XFILE::DIR_CACHE_NEVER);
+
+  for (int i=0; i<items.Size(); ++i)
+  {
+    if (items[i]->m_bIsFolder)
+      continue;
+    CFile::Delete(items[i]->GetPath());
+  }
+}
+
 static const char * sub_exts[] = { ".utf", ".utf8", ".utf-8", ".sub", ".srt", ".smi", ".rt", ".txt", ".ssa", ".aqt", ".jss", ".ass", ".idx", NULL};
 
 int64_t CUtil::ToInt64(uint32_t high, uint32_t low)
@@ -768,22 +786,6 @@ void CUtil::ThumbCacheClear()
 bool CUtil::ThumbCached(const CStdString& strFileName)
 {
   return CThumbnailCache::GetThumbnailCache()->IsCached(strFileName);
-}
-
-void CUtil::PlayDVD(const CStdString& strProtocol, bool restart)
-{
-#if defined(HAS_DVDPLAYER) && defined(HAS_DVD_DRIVE)
-  CIoSupport::Dismount("Cdrom0");
-  CIoSupport::RemapDriveLetter('D', "Cdrom0");
-  CStdString strPath;
-  strPath.Format("%s://1", strProtocol.c_str());
-  CFileItem item(strPath, false);
-  item.SetLabel(g_mediaManager.GetDiskLabel());
-  item.GetVideoInfoTag()->m_strFileNameAndPath = "removable://"; // need to put volume label for resume point in videoInfoTag
-  item.GetVideoInfoTag()->m_strFileNameAndPath += g_mediaManager.GetDiskLabel();
-  if (!restart) item.m_lStartOffset = STARTOFFSET_RESUME;
-  g_application.PlayFile(item, restart);
-#endif
 }
 
 CStdString CUtil::GetNextFilename(const CStdString &fn_template, int max)
@@ -933,7 +935,17 @@ void CUtil::TakeScreenshot(const CStdString &filename, bool sync)
   //make a new buffer and copy the read image to it with the Y axis inverted
   outpixels = new unsigned char[stride * height];
   for (int y = 0; y < height; y++)
+  {
+#ifdef HAS_GLES
+    // we need to save in BGRA order so XOR Swap RGBA -> BGRA
+    unsigned char* swap_pixels = pixels + (height - y - 1) * stride;
+    for (int x = 0; x < width; x++, swap_pixels+=4)
+    {
+      std::swap(swap_pixels[0], swap_pixels[2]);
+    }   
+#endif
     memcpy(outpixels + y * stride, pixels + (height - y - 1) * stride, stride);
+  }
 
   delete [] pixels;
 
@@ -2283,7 +2295,7 @@ void CUtil::ScanForExternalSubtitles(const CStdString& strMovie, std::vector<CSt
     StringUtils::SplitString( strPath, "\\", directories );
   
   // if it's inside a cdX dir, add parent path
-  if (directories[directories.size()-2].size() == 3 && directories[directories.size()-2].Left(2).Equals("cd")) // SplitString returns empty token as last item, hence size-2
+  if (directories.size() >= 2 && directories[directories.size()-2].size() == 3 && directories[directories.size()-2].Left(2).Equals("cd")) // SplitString returns empty token as last item, hence size-2
   {
     CStdString strPath2;
     URIUtils::GetParentPath(strPath,strPath2);

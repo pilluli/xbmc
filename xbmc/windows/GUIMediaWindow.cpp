@@ -219,6 +219,10 @@ bool CGUIMediaWindow::OnMessage(CGUIMessage& message)
 	this->SetProperty("saved_path", m_vecItems->Get(m_iSelectedItem)->GetPath()); 
       m_iLastControl = GetFocusedControlID();
       CGUIWindow::OnMessage(message);
+      CGUIDialogContextMenu* pDlg = (CGUIDialogContextMenu*)g_windowManager.GetWindow(WINDOW_DIALOG_CONTEXT_MENU);
+      if (pDlg && pDlg->IsActive())
+        pDlg->Close();
+      
       // Call ClearFileItems() after our window has finished doing any WindowClose
       // animations
       ClearFileItems();
@@ -662,7 +666,7 @@ bool CGUIMediaWindow::GetDirectory(const CStdString &strDirectory, CFileItemList
       m_history.RemoveParentPath();
   }
 
-  if (m_guiState.get() && !m_guiState->HideParentDirItems() && !items.GetPath().IsEmpty())
+  if (m_guiState.get() && !m_guiState->HideParentDirItems() && items.GetPath() != m_startDirectory)
   {
     CFileItemPtr pItem(new CFileItem(".."));
     pItem->SetPath(strParentPath);
@@ -916,7 +920,7 @@ bool CGUIMediaWindow::OnClick(int iItem)
         if (!strLockType.IsEmpty() && !g_passwordManager.IsItemUnlocked(pItem.get(), strLockType))
             return true;
 
-      if (!HaveDiscOrConnection(pItem->m_iDriveType))
+      if (!HaveDiscOrConnection(pItem->GetPath(), pItem->m_iDriveType))
         return true;
     }
 
@@ -976,19 +980,19 @@ bool CGUIMediaWindow::OnClick(int iItem)
     bool do_not_add_karaoke = g_guiSettings.GetBool("karaoke.enabled") &&
       g_guiSettings.GetBool("karaoke.autopopupselector") && pItem->IsKaraoke();
     bool autoplay = m_guiState.get() && m_guiState->AutoPlayNextItem();
-    int iPlaylist = m_guiState.get()?m_guiState->GetPlaylist():PLAYLIST_MUSIC;
 
-    if (pItem->IsPlugin())
+    if (m_vecItems->IsPlugin())
     {
-      CURL url(pItem->GetPath());
+      CURL url(m_vecItems->GetPath());
       AddonPtr addon;
       if (CAddonMgr::Get().GetAddon(url.GetHostName(),addon))
       {
         PluginPtr plugin = boost::dynamic_pointer_cast<CPluginSource>(addon);
-        if (plugin && plugin->Provides(CPluginSource::AUDIO) && pItem->IsAudio())
+        if (plugin && plugin->Provides(CPluginSource::AUDIO))
         {
-          iPlaylist = PLAYLIST_MUSIC;
-          autoplay = g_guiSettings.GetBool("musicplayer.autoplaynextitem");
+          CFileItemList items;
+          auto_ptr<CGUIViewState> state(CGUIViewState::GetViewState(GetID(), items));
+          autoplay = state.get() && state->AutoPlayNextItem();
         }
       }
     }
@@ -1014,11 +1018,11 @@ bool CGUIMediaWindow::OnSelect(int item)
 
 // \brief Checks if there is a disc in the dvd drive and whether the
 // network is connected or not.
-bool CGUIMediaWindow::HaveDiscOrConnection(int iDriveType)
+bool CGUIMediaWindow::HaveDiscOrConnection(const CStdString& strPath, int iDriveType)
 {
   if (iDriveType==CMediaSource::SOURCE_TYPE_DVD)
   {
-    if (!g_mediaManager.IsDiscInDrive())
+    if (!g_mediaManager.IsDiscInDrive(strPath))
     {
       CGUIDialogOK::ShowAndGetInput(218, 219, 0, 0);
       return false;
@@ -1201,6 +1205,8 @@ bool CGUIMediaWindow::OnPlayMedia(int iItem)
   g_playlistPlayer.Reset();
   g_playlistPlayer.SetCurrentPlaylist(PLAYLIST_NONE);
   CFileItemPtr pItem=m_vecItems->Get(iItem);
+
+  CLog::Log(LOGDEBUG, "%s %s", __FUNCTION__, pItem->GetPath().c_str());
 
   bool bResult = false;
   if (pItem->IsInternetStream() || pItem->IsPlayList())
@@ -1427,7 +1433,7 @@ void CGUIMediaWindow::GetContextButtons(int itemNumber, CContextButtons &buttons
 
   // TODO: FAVOURITES Conditions on masterlock and localisation
   if (!item->IsParentFolder() && !item->GetPath().Equals("add") && !item->GetPath().Equals("newplaylist://") &&
-      !item->GetPath().Left(19).Equals("newsmartplaylist://") && !item->IsAddonsPath())
+      !item->GetPath().Left(19).Equals("newsmartplaylist://"))
   {
     if (CFavourites::IsFavourite(item.get(), GetID()))
       buttons.Add(CONTEXT_BUTTON_ADD_FAVOURITE, 14077);     // Remove Favourite

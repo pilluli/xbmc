@@ -117,6 +117,11 @@ bool CGUIWindowVideoNav::OnMessage(CGUIMessage& message)
       m_rootDir.AllowNonLocalSources(false);
 
       SetProperty("flattened", g_settings.m_bMyVideoNavFlatten);
+      if (message.GetNumStringParams() && message.GetStringParam(0).Equals("Files") &&
+          g_settings.GetSourcesFromType("video")->empty())
+      {
+        message.SetStringParam("");
+      }
       
       if (!CGUIWindowVideoBase::OnMessage(message))
         return false;
@@ -306,14 +311,13 @@ bool CGUIWindowVideoNav::GetDirectory(const CStdString &strDirectory, CFileItemL
       {
         CLog::Log(LOGDEBUG, "WindowVideoNav::GetDirectory");
         // grab the show thumb
-        CStdString path;
-        m_database.GetFilePathById(params.GetTvShowId(),path,VIDEODB_CONTENT_TVSHOWS);
-        CFileItem showItem(path, true);
-        showItem.SetVideoThumb();
-        items.SetProperty("tvshowthumb", showItem.GetThumbnailImage());
-        // Grab fanart data
         CVideoInfoTag details;
-        m_database.GetTvShowInfo(showItem.GetPath(), details, params.GetTvShowId());
+        m_database.GetTvShowInfo("", details, params.GetTvShowId());
+        CFileItem showItem(details.m_strShowPath, true);
+        if (showItem.GetCachedVideoThumb())
+          items.SetProperty("tvshowthumb", showItem.GetCachedVideoThumb());
+
+        // Grab fanart data
         items.SetProperty("fanart_color1", details.m_fanart.GetColor(0));
         items.SetProperty("fanart_color2", details.m_fanart.GetColor(1));
         items.SetProperty("fanart_color3", details.m_fanart.GetColor(2));
@@ -344,7 +348,7 @@ bool CGUIWindowVideoNav::GetDirectory(const CStdString &strDirectory, CFileItemL
           // grab the season thumb as the folder thumb
           CStdString strLabel;
           CStdString strPath;
-          if (params.GetSeason() == -1 && items.Size() > 0)
+          if (params.GetSeason() <= -1 && items.Size() > 0)
           {
             CQueryParams params2;
             dir.GetQueryParams(items[0]->GetPath(),params2);
@@ -375,6 +379,7 @@ bool CGUIWindowVideoNav::GetDirectory(const CStdString &strDirectory, CFileItemL
         }
       }
       else if (node == NODE_TYPE_TITLE_MOVIES ||
+               node == NODE_TYPE_SETS ||
                node == NODE_TYPE_RECENTLY_ADDED_MOVIES)
         items.SetContent("movies");
       else if (node == NODE_TYPE_TITLE_TVSHOWS)
@@ -404,12 +409,13 @@ bool CGUIWindowVideoNav::GetDirectory(const CStdString &strDirectory, CFileItemL
       else
         items.SetContent("");
     }
-    else
+    else if (!items.IsVirtualDirectoryRoot())
     { // load info from the database
       CStdString label;
       if (items.GetLabel().IsEmpty() && m_rootDir.IsSource(items.GetPath(), g_settings.GetSourcesFromType("video"), &label)) 
         items.SetLabel(label);
-      LoadVideoInfo(items);
+      if (!items.IsSourcesPath())
+        LoadVideoInfo(items);
     }
   }
   return bResult;
@@ -425,9 +431,19 @@ void CGUIWindowVideoNav::LoadVideoInfo(CFileItemList &items)
   CStdString content = m_database.GetContentForPath(items.GetPath());
   items.SetContent(content.IsEmpty() ? "files" : content);
 
-  bool fileMetaData = (g_guiSettings.GetBool("myvideos.filemetadata") &&
-                      !content.IsEmpty() &&
-                       m_stackingAvailable);
+  /*
+    If we have a matching item in the library, so we can assign the metadata to it. In addition, we can choose
+    * whether the item is stacked down (eg in the case of folders representing a single item)
+    * whether or not we assign the library's labels to the item, or leave the item as is.
+
+    As certain users (read: certain developers) don't want either of these to occur, we compromise by stacking
+    items down only if stacking is available and enabled.
+
+    Similarly, we assign the "clean" library labels to the item only if the "Replace filenames with library titles"
+    setting is enabled.
+    */
+  bool stackItems    = items.GetProperty("isstacked").asBoolean() || (StackingAvailable(items) && g_settings.m_videoStacking);
+  bool replaceLabels = g_guiSettings.GetBool("myvideos.replacelabels");
 
   CFileItemList dbItems;
   /* NOTE: In the future when GetItemsForPath returns all items regardless of whether they're "in the library"
@@ -443,15 +459,13 @@ void CGUIWindowVideoNav::LoadVideoInfo(CFileItemList &items)
   {
     CFileItemPtr pItem = items[i];
     CFileItemPtr match;
-    if (!content.IsEmpty())
-      match = dbItems.Get(pItem->GetPath());
+    if (!content.IsEmpty()) /* optical media will be stacked down, so it's path won't match the base path */
+      match = dbItems.Get(pItem->IsOpticalMediaFile() ? pItem->GetLocalMetadataPath() : pItem->GetPath());
     if (match)
     {
-      CStdString label (pItem->GetLabel ());
-      CStdString label2(pItem->GetLabel2());
-      pItem->UpdateInfo(*match);
-      
-      if (fileMetaData)
+      pItem->UpdateInfo(*match, replaceLabels);
+
+      if (stackItems)
       {
         if (match->m_bIsFolder)
           pItem->SetPath(match->GetVideoInfoTag()->m_strPath);
@@ -464,14 +478,6 @@ void CGUIWindowVideoNav::LoadVideoInfo(CFileItemList &items)
           items.SetSortIgnoreFolders(true);
           pItem->m_bIsFolder = match->m_bIsFolder;
         }
-      }
-      else
-      {
-        if (CFile::Exists(match->GetCachedFanart()))
-          pItem->SetProperty("fanart_image", match->GetCachedFanart());
-
-        pItem->SetLabel (label);
-        pItem->SetLabel2(label2);
       }
     }
     else
@@ -486,11 +492,11 @@ void CGUIWindowVideoNav::LoadVideoInfo(CFileItemList &items)
       }
       
       // set the watched overlay
-      if (pItem->HasVideoInfoTag())
-        pItem->SetOverlayImage(CGUIListItem::ICON_OVERLAY_UNWATCHED, pItem->GetVideoInfoTag()->m_playCount > 0);
+      if (pItem->IsVideo())
+        pItem->SetOverlayImage(CGUIListItem::ICON_OVERLAY_UNWATCHED, pItem->HasVideoInfoTag() && pItem->GetVideoInfoTag()->m_playCount > 0);
 
-      // Since the item is not in our db, as an alternative clean its name
-      if (fileMetaData)
+      // Since the item is not in our db but the user wants a clean label we should clean it up (stacking may do some cleaning as well)
+      if (replaceLabels)
         pItem->CleanString();
     }
   }
@@ -661,7 +667,7 @@ bool CGUIWindowVideoNav::CanDelete(const CStdString& strPath)
   if (params.GetMovieId()   != -1 ||
       params.GetEpisodeId() != -1 ||
       params.GetMVideoId()  != -1 ||
-      (params.GetTvShowId() != -1 && params.GetSeason() == -1
+      (params.GetTvShowId() != -1 && params.GetSeason() <= -1
               && !CVideoDatabaseDirectory::IsAllItem(strPath)))
     return true;
 
@@ -673,7 +679,7 @@ void CGUIWindowVideoNav::OnDeleteItem(CFileItemPtr pItem)
   if (m_vecItems->IsParentFolder())
     return;
 
-  if (!m_vecItems->IsVideoDb())
+  if (!m_vecItems->IsVideoDb() && !pItem->IsVideoDb())
   {
     if (!pItem->GetPath().Equals("newsmartplaylist://video") &&
         !pItem->GetPath().Equals("special://videoplaylists/") &&
@@ -842,6 +848,7 @@ void CGUIWindowVideoNav::OnPrepareFileItems(CFileItemList &items)
   bool filterWatched=false;
   if (node == NODE_TYPE_EPISODES
   ||  node == NODE_TYPE_SEASONS
+  ||  node == NODE_TYPE_SETS
   ||  node == NODE_TYPE_TITLE_MOVIES
   ||  node == NODE_TYPE_TITLE_TVSHOWS
   ||  node == NODE_TYPE_TITLE_MUSICVIDEOS
@@ -1080,7 +1087,11 @@ void CGUIWindowVideoNav::GetContextButtons(int itemNumber, CContextButtons &butt
           if (!pScanDlg || (pScanDlg && !pScanDlg->IsScanning()))
           {
             if (info && info->Content() != CONTENT_NONE)
+            {
               buttons.Add(CONTEXT_BUTTON_SET_CONTENT, 20442);
+              if (info && (!pScanDlg || (pScanDlg && !pScanDlg->IsScanning())))
+                buttons.Add(CONTEXT_BUTTON_SCAN, 13349);
+            }
             else
               buttons.Add(CONTEXT_BUTTON_SET_CONTENT, 20333);
           }
@@ -1326,7 +1337,7 @@ bool CGUIWindowVideoNav::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
     }
   case CONTEXT_BUTTON_UPDATE_LIBRARY:
     {
-      OnScan("");
+      OnScan("",true);
       return true;
     }
   case CONTEXT_BUTTON_UNLINK_MOVIE:
@@ -1451,6 +1462,7 @@ bool CGUIWindowVideoNav::OnClick(int iItem)
   CFileItemPtr item = m_vecItems->Get(iItem);
   if (!item->m_bIsFolder && item->IsVideoDb() && !item->Exists())
   {
+    CLog::Log(LOGDEBUG, "%s called on '%s' but file doesn't exist", __FUNCTION__, item->GetPath().c_str());
     if (!DeleteItem(item.get(), true))
       return true;
 

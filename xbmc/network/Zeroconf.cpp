@@ -21,6 +21,7 @@
 #include "system.h" //HAS_ZEROCONF define
 #include "Zeroconf.h"
 #include "settings/Settings.h"
+#include "settings/GUISettings.h"
 
 #ifdef _LINUX
 #ifndef __APPLE__
@@ -29,11 +30,14 @@
 //on osx use the native implementation
 #include "osx/ZeroconfOSX.h"
 #endif
+#elif defined(TARGET_WINDOWS)
+#include "windows/ZeroconfWIN.h"
 #endif
 
 #include "threads/CriticalSection.h"
 #include "threads/SingleLock.h"
 #include "threads/Atomics.h"
+#include "utils/JobManager.h"
 
 #ifndef HAS_ZEROCONF
 //dummy implementation used if no zeroconf is present
@@ -73,7 +77,8 @@ bool CZeroconf::PublishService(const std::string& fcr_identifier,
   if(!ret.second) //identifier exists
     return false;
   if(m_started)
-    return doPublishService(fcr_identifier, fcr_type, fcr_name, f_port, txt);
+    CJobManager::GetInstance().AddJob(new CPublish(fcr_identifier, info), NULL);
+
   //not yet started, so its just queued
   return true;
 }
@@ -99,12 +104,18 @@ bool CZeroconf::HasService(const std::string& fcr_identifier) const
 void CZeroconf::Start()
 {
   CSingleLock lock(*mp_crit_sec);
+  if(!IsZCdaemonRunning())
+  {
+    g_guiSettings.SetBool("services.zeroconf", false);
+    if (g_guiSettings.GetBool("services.airplay"))
+      g_guiSettings.SetBool("services.airplay", false);
+    return;
+  }
   if(m_started)
     return;
   m_started = true;
-  for(tServiceMap::const_iterator it = m_service_map.begin(); it != m_service_map.end(); ++it){
-    doPublishService(it->first, it->second.type, it->second.name, it->second.port, it->second.txt);
-  }
+
+  CJobManager::GetInstance().AddJob(new CPublish(m_service_map), NULL);
 }
 
 void CZeroconf::Stop()
@@ -128,6 +139,8 @@ CZeroconf*  CZeroconf::GetInstance()
     smp_instance = new CZeroconfOSX;
 #elif defined(_LINUX)
     smp_instance  = new CZeroconfAvahi;
+#elif defined(TARGET_WINDOWS)
+    smp_instance  = new CZeroconfWIN;
 #endif
 #endif
   }
@@ -142,3 +155,20 @@ void CZeroconf::ReleaseInstance()
   smp_instance = 0;
 }
 
+CZeroconf::CPublish::CPublish(const std::string& fcr_identifier, const PublishInfo& pubinfo)
+{
+  m_servmap.insert(std::make_pair(fcr_identifier, pubinfo));
+}
+
+CZeroconf::CPublish::CPublish(const tServiceMap& servmap) 
+  : m_servmap(servmap)
+{
+}
+
+bool CZeroconf::CPublish::DoWork()
+{
+  for(tServiceMap::const_iterator it = m_servmap.begin(); it != m_servmap.end(); ++it)
+    CZeroconf::GetInstance()->doPublishService(it->first, it->second.type, it->second.name, it->second.port, it->second.txt);
+
+  return true;
+}

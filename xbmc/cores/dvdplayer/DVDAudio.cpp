@@ -78,7 +78,22 @@ bool CDVDAudio::Create(const DVDAudioFrame &audioframe, CodecID codec)
 
   // if passthrough isset do something else
   CSingleLock lock (m_critSection);
-  m_pAudioDecoder = CAudioRendererFactory::Create(m_pCallback, audioframe.channels, audioframe.channel_map, audioframe.sample_rate, audioframe.bits_per_sample, false, false, audioframe.passthrough);
+
+  IAudioRenderer::EEncoded encoded = IAudioRenderer::ENCODED_NONE;
+  if(audioframe.passthrough)
+  {
+    switch(codec) {
+      case CODEC_ID_AC3 : encoded = IAudioRenderer::ENCODED_IEC61937_AC3;     break;
+      case CODEC_ID_EAC3: encoded = IAudioRenderer::ENCODED_IEC61937_EAC3;    break;
+      case CODEC_ID_DTS : encoded = IAudioRenderer::ENCODED_IEC61937_DTS;     break;
+      case CODEC_ID_MP1 :
+      case CODEC_ID_MP2 :
+      case CODEC_ID_MP3 : encoded = IAudioRenderer::ENCODED_IEC61937_MPEG;    break;
+      default:            encoded = IAudioRenderer::ENCODED_IEC61937_UNKNOWN; break;
+    }
+  }
+
+  m_pAudioDecoder = CAudioRendererFactory::Create(m_pCallback, audioframe.channels, audioframe.channel_map, audioframe.sample_rate, audioframe.bits_per_sample, false, false, encoded);
 
   if (!m_pAudioDecoder) return false;
 
@@ -228,6 +243,31 @@ DWORD CDVDAudio::AddPackets(const DVDAudioFrame &audioframe)
     memcpy(m_pBuffer, data, len);
   }
   return total;
+}
+
+double CDVDAudio::AddSilence(double delay)
+{
+  CLog::Log(LOGDEBUG, "CDVDAudio::AddSilence - %f seconds", delay);
+  DVDAudioFrame audioframe;
+  audioframe.passthrough     = m_bPassthrough;
+  audioframe.channels        = m_iChannels;
+  audioframe.sample_rate     = m_iBitrate;
+  audioframe.bits_per_sample = m_iBitsPerSample;
+  audioframe.size            = m_iChannels * (m_iBitsPerSample>>3);
+  audioframe.data            = (BYTE*)calloc(1, audioframe.size);
+  if(audioframe.data == NULL)
+    return 0.0;
+  unsigned samples = m_iBitrate * delay;
+  unsigned added = 0;
+  for(; added < samples; added++)
+  {
+    if(AddPackets(audioframe) != audioframe.size)
+      break;
+  }
+  if(added < samples)
+    CLog::Log(LOGDEBUG, "CDVDAudio::AddSilence - failed to %d silence samples of %u", samples - added, samples);
+  free(audioframe.data);
+  return (double)added / m_iBitrate;
 }
 
 void CDVDAudio::Finish()

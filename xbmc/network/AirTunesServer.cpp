@@ -21,6 +21,10 @@
 
 #include "AirTunesServer.h"
 
+#ifdef HAS_AIRPLAY
+#include "network/AirPlayServer.h"
+#endif
+
 #ifdef HAS_AIRTUNES
 
 #include "utils/log.h"
@@ -32,7 +36,9 @@
 #include "cores/paplayer/BXAcodec.h"
 #include "music/tags/MusicInfoTag.h"
 #include "FileItem.h"
+#include "GUIInfoManager.h"
 #include "utils/Variant.h"
+#include "settings/AdvancedSettings.h"
 
 using namespace XFILE;
 
@@ -137,8 +143,20 @@ int CAirTunesServer::AudioOutputFunctions::ao_close(ao_device *device)
   device_xbmc->pipe->Close();
   delete device_xbmc->pipe;
 
-  ThreadMessage tMsg = { TMSG_MEDIA_STOP };
-  g_application.getApplicationMessenger().SendMessage(tMsg, true);
+  //fix airplay video for ios5 devices
+  //on ios5 when airplaying video
+  //the client first opens an airtunes stream
+  //while the movie is loading
+  //in that case we don't want to stop the player here
+  //because this would stop the airplaying video
+#ifdef HAS_AIRPLAY
+  if (!CAirPlayServer::IsPlaying())
+#endif
+  {
+    ThreadMessage tMsg = { TMSG_MEDIA_STOP };
+    g_application.getApplicationMessenger().SendMessage(tMsg, true);
+    CLog::Log(LOGDEBUG, "AIRTUNES: AirPlay not running - stopping player");
+  }
 
   delete device_xbmc;
 
@@ -199,7 +217,6 @@ char* CAirTunesServer::AudioOutputFunctions::ao_get_option(ao_option *options, c
   return NULL;
 }
 
-
 bool CAirTunesServer::StartServer(int port, bool nonlocal, bool usePassword, const CStdString &password/*=""*/)
 {
   bool success = false;
@@ -236,7 +253,7 @@ bool CAirTunesServer::StartServer(int port, bool nonlocal, bool usePassword, con
   if (success)
   {
     CStdString appName;
-    appName.Format("%s@XBMC", m_macAddress.c_str());
+    appName.Format("%s@%s", m_macAddress.c_str(), g_infoManager.GetLabel(SYSTEM_FRIENDLY_NAME).c_str());
 
     std::map<std::string, std::string> txt;
     txt["cn"] = "0,1";
@@ -303,24 +320,35 @@ void CAirTunesServer::Process()
   }
 }
 
+int shairport_log(const char* msg, size_t msgSize)
+{
+  if( g_advancedSettings.m_logEnableAirtunes)
+  {
+    CLog::Log(LOGDEBUG, "AIRTUNES: %s", msg);
+  }
+  return 1;
+}
+
 bool CAirTunesServer::Initialize(const CStdString &password)
 {
   bool ret = false;
   int numArgs = 3;
   CStdString hwStr;
   CStdString pwStr;
+  CStdString portStr;
 
   Deinitialize();
 
   hwStr.Format("--mac=%s", m_macAddress.c_str());
   pwStr.Format("--password=%s",password.c_str());
+  portStr.Format("--server_port=%d",m_port);
 
   if (!password.empty())
   {
     numArgs++;
   }
 
-  char *argv[] = { "--apname=XBMC", "--server_port=5000", (char*) hwStr.c_str(), (char *)pwStr.c_str(), NULL };
+  char *argv[] = { "--apname=XBMC", (char*) portStr.c_str(), (char*) hwStr.c_str(), (char *)pwStr.c_str(), NULL };
 
   if (m_pLibShairport->Load())
   {
@@ -334,9 +362,12 @@ bool CAirTunesServer::Initialize(const CStdString &password)
     ao.ao_append_option = AudioOutputFunctions::ao_append_option;
     ao.ao_free_options = AudioOutputFunctions::ao_free_options;
     ao.ao_get_option = AudioOutputFunctions::ao_get_option;
+    struct printfPtr funcPtr;
+    funcPtr.extprintf = shairport_log;
 
     m_pLibShairport->EnableDelayedUnload(false);
     m_pLibShairport->shairport_set_ao(&ao);
+    m_pLibShairport->shairport_set_printf(&funcPtr);
     m_pLibShairport->shairport_main(numArgs, argv);
     ret = true;
   }

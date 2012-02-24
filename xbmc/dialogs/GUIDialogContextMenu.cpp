@@ -94,6 +94,17 @@ bool CGUIDialogContextMenu::OnMessage(CGUIMessage &message)
   return CGUIDialog::OnMessage(message);
 }
 
+bool CGUIDialogContextMenu::OnAction(const CAction& action)
+{
+  if (action.GetID() == ACTION_CONTEXT_MENU)
+  {
+    Close();
+    return true;
+  }
+
+  return CGUIDialog::OnAction(action);
+}
+
 void CGUIDialogContextMenu::OnInitWindow()
 {
   m_clickedButton = -1;
@@ -134,7 +145,11 @@ void CGUIDialogContextMenu::SetupButtons()
       if (pGroupList)
       {
         pButton->SetPosition(pButtonTemplate->GetXPosition(), pButtonTemplate->GetYPosition());
-        pGroupList->AddControl(pButton);
+        // try inserting context buttons at position specified by template
+        // button, if template button is not in grouplist fallback to adding
+        // new buttons at the end of grouplist
+        if (!pGroupList->InsertControl(pButton, pButtonTemplate))
+          pGroupList->AddControl(pButton);
       }
 #if PRE_SKIN_VERSION_11_COMPATIBILITY
       else
@@ -205,10 +220,17 @@ void CGUIDialogContextMenu::SetupButtons()
   }
 
   // update our default control
-  if (m_defaultControl < BUTTON_START || m_defaultControl > BUTTON_END)
-    m_defaultControl = BUTTON_START;
-  while (m_defaultControl <= BUTTON_END && !(GetControl(m_defaultControl)->CanFocus()))
-    m_defaultControl++;
+  if (pGroupList)
+    m_defaultControl = pGroupList->GetID();
+#if PRE_SKIN_VERSION_11_COMPATIBILITY
+  else
+  {
+    if (m_defaultControl < BUTTON_START || m_defaultControl > BUTTON_END)
+      m_defaultControl = BUTTON_START;
+    while (m_defaultControl <= BUTTON_END && !(GetControl(m_defaultControl)->CanFocus()))
+      m_defaultControl++;
+  }
+#endif
 }
 
 void CGUIDialogContextMenu::SetPosition(float posX, float posY)
@@ -285,14 +307,10 @@ void CGUIDialogContextMenu::GetContextButtons(const CStdString &type, const CFil
     if (item->IsDVD() || item->IsCDDA())
     {
       // We need to check if there is a detected is inserted!
-      if ( g_mediaManager.IsDiscInDrive() ) 
-      {
-        buttons.Add(CONTEXT_BUTTON_PLAY_DISC, 341); // Play CD/DVD!
-        if (CGUIWindowVideoBase::GetResumeItemOffset(item.get()) > 0)
-        {
-          buttons.Add(CONTEXT_BUTTON_RESUME_DISC, CGUIWindowVideoBase::GetResumeString(*(item.get())));     // Resume Disc
-        }
-      }
+      buttons.Add(CONTEXT_BUTTON_PLAY_DISC, 341); // Play CD/DVD!
+      if (CGUIWindowVideoBase::GetResumeItemOffset(item.get()) > 0)
+        buttons.Add(CONTEXT_BUTTON_RESUME_DISC, CGUIWindowVideoBase::GetResumeString(*(item.get())));     // Resume Disc
+
       buttons.Add(CONTEXT_BUTTON_EJECT_DISC, 13391);  // Eject/Load CD/DVD!
     }
     else // Must be HDD
@@ -386,10 +404,10 @@ bool CGUIDialogContextMenu::OnContextButton(const CStdString &type, const CFileI
 
 #ifdef HAS_DVD_DRIVE
   case CONTEXT_BUTTON_PLAY_DISC:
-    return MEDIA_DETECT::CAutorun::PlayDisc(true); // restart
+    return MEDIA_DETECT::CAutorun::PlayDisc(item->GetPath(), true, true); // restart
 
   case CONTEXT_BUTTON_RESUME_DISC:
-    return MEDIA_DETECT::CAutorun::PlayDisc(false);// resume
+    return MEDIA_DETECT::CAutorun::PlayDisc(item->GetPath(), true, false); // resume
 
   case CONTEXT_BUTTON_EJECT_DISC:
 #ifdef _WIN32

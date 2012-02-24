@@ -76,6 +76,8 @@ public:
 
   virtual bool TestRender();
 
+  virtual void Project(float &x, float &y, float &z);
+
   LPDIRECT3DDEVICE9 Get3DDevice() { return m_pD3DDevice; }
   int GetBackbufferCount() const { return m_D3DPP.BackBufferCount; }
 
@@ -119,6 +121,7 @@ protected:
   void BuildPresentParameters();
   virtual void UpdateMonitor() {};
   BOOL IsDepthFormatOk(D3DFORMAT DepthFormat, D3DFORMAT RenderTargetFormat);
+  void OnMove();
 
   LPDIRECT3D9                 m_pD3D;
 
@@ -151,6 +154,11 @@ protected:
   std::vector<ID3DResource*>  m_resources;
 
   bool                        m_inScene; ///< True if we're in a BeginScene()/EndScene() block
+
+  D3DVIEWPORT9                m_viewPort;
+  D3DXMATRIX                  m_projection;
+  D3DXMATRIX                  m_view;
+  D3DXMATRIX                  m_world;
 };
 
 #endif

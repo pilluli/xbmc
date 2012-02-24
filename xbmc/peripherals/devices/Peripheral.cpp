@@ -37,13 +37,13 @@ CPeripheral::CPeripheral(const PeripheralType type, const PeripheralBusType busT
   m_strDeviceName(strDeviceName),
   m_strFileLocation(StringUtils::EmptyString),
   m_iVendorId(iVendorId),
-  m_strVendorId(PeripheralTypeTranslator::IntToHexString(iVendorId)),
   m_iProductId(iProductId),
-  m_strProductId(PeripheralTypeTranslator::IntToHexString(iProductId)),
   m_bInitialised(false),
   m_bHidden(false),
   m_bError(false)
 {
+  PeripheralTypeTranslator::FormatHexString(iVendorId, m_strVendorId);
+  PeripheralTypeTranslator::FormatHexString(iProductId, m_strProductId);
   m_strFileLocation.Format("peripherals://%s/%s.dev", PeripheralTypeTranslator::BusTypeToString(busType), strLocation.c_str());
 }
 
@@ -54,9 +54,9 @@ CPeripheral::CPeripheral(void) :
   m_strDeviceName(StringUtils::EmptyString),
   m_strFileLocation(StringUtils::EmptyString),
   m_iVendorId(0),
-  m_strVendorId(PeripheralTypeTranslator::IntToHexString(0)),
+  m_strVendorId("0000"),
   m_iProductId(0),
-  m_strProductId(PeripheralTypeTranslator::IntToHexString(0)),
+  m_strProductId("0000"),
   m_bInitialised(false),
   m_bHidden(false)
 {
@@ -64,7 +64,7 @@ CPeripheral::CPeripheral(void) :
 
 CPeripheral::~CPeripheral(void)
 {
-  PersistSettings();
+  PersistSettings(true);
 
   for (unsigned int iSubdevicePtr = 0; iSubdevicePtr < m_subDevices.size(); iSubdevicePtr++)
     delete m_subDevices.at(iSubdevicePtr);
@@ -135,7 +135,7 @@ bool CPeripheral::Initialise(void)
     return bReturn;
 
   g_peripherals.GetSettingsFromMapping(*this);
-  m_strSettingsFile.Format("special://profile/peripheral_data/%s_%s_%s.xml", PeripheralTypeTranslator::BusTypeToString(m_busType), m_strVendorId, m_strProductId);
+  m_strSettingsFile.Format("special://profile/peripheral_data/%s_%s_%s.xml", PeripheralTypeTranslator::BusTypeToString(m_busType), m_strVendorId.c_str(), m_strProductId.c_str());
   LoadPersistedSettings();
 
   for (unsigned int iFeaturePtr = 0; iFeaturePtr < m_features.size(); iFeaturePtr++)
@@ -149,7 +149,8 @@ bool CPeripheral::Initialise(void)
 
   if (bReturn)
   {
-    CLog::Log(LOGDEBUG, "%s - initialised peripheral on '%s' with %d features and %d sub devices", __FUNCTION__, m_strLocation.c_str(), m_features.size(), m_subDevices.size());
+    CLog::Log(LOGDEBUG, "%s - initialised peripheral on '%s' with %d features and %d sub devices",
+      __FUNCTION__, m_strLocation.c_str(), (int)m_features.size(), (int)m_subDevices.size());
     m_bInitialised = true;
   }
 
@@ -322,7 +323,7 @@ void CPeripheral::SetSetting(const CStdString &strKey, bool bValue)
       bool bChanged(boolSetting->GetData() != bValue);
       boolSetting->SetData(bValue);
       if (bChanged && m_bInitialised)
-        OnSettingChanged(strKey);
+        m_changedSettings.push_back(strKey);
     }
   }
 }
@@ -338,7 +339,7 @@ void CPeripheral::SetSetting(const CStdString &strKey, int iValue)
       bool bChanged(intSetting->GetData() != iValue);
       intSetting->SetData(iValue);
       if (bChanged && m_bInitialised)
-        OnSettingChanged(strKey);
+        m_changedSettings.push_back(strKey);
     }
   }
 }
@@ -354,7 +355,7 @@ void CPeripheral::SetSetting(const CStdString &strKey, float fValue)
       bool bChanged(floatSetting->GetData() != fValue);
       floatSetting->SetData(fValue);
       if (bChanged && m_bInitialised)
-        OnSettingChanged(strKey);
+        m_changedSettings.push_back(strKey);
     }
   }
 }
@@ -372,7 +373,7 @@ void CPeripheral::SetSetting(const CStdString &strKey, const CStdString &strValu
         bool bChanged(!stringSetting->GetData().Equals(strValue));
         stringSetting->SetData(strValue);
         if (bChanged && m_bInitialised)
-          OnSettingChanged(strKey);
+          m_changedSettings.push_back(strKey);
       }
     }
     else if ((*it).second->GetType() == SETTINGS_TYPE_INT)
@@ -384,7 +385,7 @@ void CPeripheral::SetSetting(const CStdString &strKey, const CStdString &strValu
   }
 }
 
-void CPeripheral::PersistSettings(void) const
+void CPeripheral::PersistSettings(bool bExiting /* = false */)
 {
   TiXmlDocument doc;
   TiXmlElement node("settings");
@@ -432,6 +433,13 @@ void CPeripheral::PersistSettings(void) const
   }
 
   doc.SaveFile(m_strSettingsFile);
+
+  if (!bExiting)
+  {
+    for (vector<CStdString>::iterator it = m_changedSettings.begin(); it != m_changedSettings.end(); it++)
+      OnSettingChanged(*it);
+  }
+  m_changedSettings.clear();
 }
 
 void CPeripheral::LoadPersistedSettings(void)
@@ -455,7 +463,15 @@ void CPeripheral::ResetDefaultSettings(void)
 {
   ClearSettings();
   g_peripherals.GetSettingsFromMapping(*this);
-  OnSettingsChanged();
+
+  map<CStdString, CSetting *>::iterator it = m_settings.begin();
+  while (it != m_settings.end())
+  {
+    m_changedSettings.push_back((*it).first);
+    ++it;
+  }
+
+  PersistSettings();
 }
 
 void CPeripheral::ClearSettings(void)
@@ -467,14 +483,4 @@ void CPeripheral::ClearSettings(void)
     ++it;
   }
   m_settings.clear();
-}
-
-void CPeripheral::OnSettingsChanged(void)
-{
-  map<CStdString, CSetting *>::iterator it = m_settings.begin();
-  while (it != m_settings.end())
-  {
-    OnSettingChanged((*it).first);
-    ++it;
-  }
 }

@@ -294,9 +294,6 @@ void CNetwork::StartServices()
   if (!g_application.StartEventServer())
     CGUIDialogKaiToast::QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33102), g_localizeStrings.Get(33100));
 #endif
-#ifdef HAS_DBUS_SERVER
-  g_application.StartDbusServer();
-#endif
 #ifdef HAS_JSONRPC
   if (!g_application.StartJSONRPCServer())
     CGUIDialogKaiToast::QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33103), g_localizeStrings.Get(33100));
@@ -338,10 +335,10 @@ void CNetwork::StopServices(bool bWait)
 #ifdef HAS_EVENT_SERVER
   g_application.StopEventServer(bWait, false);
 #endif
-#ifdef HAS_DBUS_SERVER
-  g_application.StopDbusServer(bWait);
-#endif
 #ifdef HAS_JSONRPC
     g_application.StopJSONRPCServer(bWait);
+#endif
+#if defined(HAS_AIRPLAY) || defined(HAS_AIRTUNES)
+    g_application.StopAirplayServer(bWait);
 #endif
 }

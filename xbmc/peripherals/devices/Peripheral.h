@@ -32,7 +32,7 @@ namespace PERIPHERALS
 
   class CPeripheral
   {
-    friend class CGUIDialogPeripheralSettings;;
+    friend class CGUIDialogPeripheralSettings;
 
   public:
     CPeripheral(const PeripheralType type, const PeripheralBusType busType, const CStdString &strLocation, const CStdString &strDeviceName, int iVendorId, int iProductId);
@@ -45,9 +45,9 @@ namespace PERIPHERALS
     const CStdString &FileLocation(void) const     { return m_strFileLocation; }
     const CStdString &Location(void) const         { return m_strLocation; }
     int VendorId(void) const                       { return m_iVendorId; }
-    const char *VendorIdAsString(void) const       { return m_strVendorId; }
+    const char *VendorIdAsString(void) const       { return m_strVendorId.c_str(); }
     int ProductId(void) const                      { return m_iProductId; }
-    const char *ProductIdAsString(void) const      { return m_strProductId; }
+    const char *ProductIdAsString(void) const      { return m_strProductId.c_str(); }
     const PeripheralType Type(void) const          { return m_type; }
     const PeripheralBusType GetBusType(void) const { return m_busType; };
     const CStdString &DeviceName(void) const       { return m_strDeviceName; }
@@ -85,11 +85,6 @@ namespace PERIPHERALS
      * @param strChangedSetting The changed setting.
      */
     virtual void OnSettingChanged(const CStdString &strChangedSetting) {};
-
-    /*!
-     * @brief Called when one or more settings changed. Calls OnSettingChanged for every setting.
-     */
-    virtual void OnSettingsChanged(void);
 
     /*!
      * @brief Get all subdevices if this device is multifunctional.
@@ -143,7 +138,7 @@ namespace PERIPHERALS
     virtual float GetSettingFloat(const CStdString &strKey) const;
     virtual void SetSetting(const CStdString &strKey, float fValue);
 
-    virtual void PersistSettings(void) const;
+    virtual void PersistSettings(bool bExiting = false);
     virtual void LoadPersistedSettings(void);
     virtual void ResetDefaultSettings(void);
 
@@ -159,14 +154,15 @@ namespace PERIPHERALS
     CStdString                       m_strSettingsFile;
     CStdString                       m_strFileLocation;
     int                              m_iVendorId;
-    char *                           m_strVendorId;
+    CStdString                       m_strVendorId;
     int                              m_iProductId;
-    char *                           m_strProductId;
+    CStdString                       m_strProductId;
     bool                             m_bInitialised;
     bool                             m_bHidden;
     bool                             m_bError;
     std::vector<PeripheralFeature>   m_features;
     std::vector<CPeripheral *>       m_subDevices;
     std::map<CStdString, CSetting *> m_settings;
+    std::vector<CStdString>          m_changedSettings;
   };
 }

@@ -21,10 +21,59 @@
 
 #include "PeripheralBusUSBLibUdev.h"
 #include "peripherals/Peripherals.h"
+extern "C" {
 #include <libudev.h>
-#include <usb.h>
+}
 #include <poll.h>
 #include "utils/log.h"
+
+#ifndef USB_CLASS_PER_INTERFACE
+#define USB_CLASS_PER_INTERFACE         0
+#endif
+
+#ifndef USB_CLASS_AUDIO
+#define USB_CLASS_AUDIO                 1
+#endif
+
+#ifndef USB_CLASS_COMM
+#define USB_CLASS_COMM                  2
+#endif
+
+#ifndef USB_CLASS_HID
+#define USB_CLASS_HID                   3
+#endif
+
+#ifndef USB_CLASS_PHYSICAL
+#define USB_CLASS_PHYSICAL              5
+#endif
+
+#ifndef USB_CLASS_PTP
+#define USB_CLASS_PTP                   6
+#endif
+
+#ifndef USB_CLASS_PRINTER
+#define USB_CLASS_PRINTER               7
+#endif
+
+#ifndef USB_CLASS_MASS_STORAGE
+#define USB_CLASS_MASS_STORAGE          8
+#endif
+
+#ifndef USB_CLASS_HUB
+#define USB_CLASS_HUB                   9
+#endif
+
+#ifndef USB_CLASS_DATA
+#define USB_CLASS_DATA                  10
+#endif
+
+#ifndef USB_CLASS_APP_SPEC
+#define USB_CLASS_APP_SPEC              0xfe
+#endif
+
+#ifndef USB_CLASS_VENDOR_SPEC
+#define USB_CLASS_VENDOR_SPEC           0xff
+#endif
 
 using namespace PERIPHERALS;
 
@@ -52,48 +101,77 @@ CPeripheralBusUSB::CPeripheralBusUSB(CPeripherals *manager) :
   CLog::Log(LOGDEBUG, "%s - initialised udev monitor: %d", __FUNCTION__, m_udevFd);
 }
 
+CPeripheralBusUSB::~CPeripheralBusUSB(void)
+{
+  StopThread(true);
+  udev_monitor_unref(m_udevMon);
+  udev_unref(m_udev);
+}
+
 bool CPeripheralBusUSB::PerformDeviceScan(PeripheralScanResults &results)
 {
   struct udev_enumerate *enumerate;
   struct udev_list_entry *devices, *dev_list_entry;
-  struct udev_device *dev;
+  struct udev_device *dev(NULL), *parent(NULL);
   enumerate = udev_enumerate_new(m_udev);
   udev_enumerate_scan_devices(enumerate);
   devices = udev_enumerate_get_list_entry(enumerate);
+
+  bool bContinue(true);
+  CStdString strPath, strClass;
   udev_list_entry_foreach(dev_list_entry, devices)
   {
-    const char *strPath;
     strPath = udev_list_entry_get_name(dev_list_entry);
+    if (strPath.IsEmpty())
+      bContinue = false;
 
-    dev = udev_device_new_from_syspath(m_udev, strPath);
-    if (!dev)
-      continue;
-
-    dev = udev_device_get_parent(udev_device_get_parent(dev));
-    if (!dev || !udev_device_get_sysattr_value(dev,"idVendor") || !udev_device_get_sysattr_value(dev, "idProduct"))
-      continue;
-
-    const char *strClass = udev_device_get_sysattr_value(dev, "bDeviceClass");
-    if (!strClass)
-      continue;
-
-    int iClass = PeripheralTypeTranslator::HexStringToInt(strClass);
-    if (iClass == USB_CLASS_PER_INTERFACE)
+    if (bContinue)
     {
-      //TODO
-      iClass = USB_CLASS_HID;
+      if (!(parent = udev_device_new_from_syspath(m_udev, strPath)))
+        bContinue = false;
     }
 
-    PeripheralScanResult result;
-    result.m_iVendorId   = PeripheralTypeTranslator::HexStringToInt(udev_device_get_sysattr_value(dev, "idVendor"));
-    result.m_iProductId  = PeripheralTypeTranslator::HexStringToInt(udev_device_get_sysattr_value(dev, "idProduct"));
-    result.m_type        = GetType(iClass);
-    result.m_strLocation = udev_device_get_syspath(dev);
+    if (bContinue)
+    {
+      dev = udev_device_get_parent(udev_device_get_parent(parent));
+      if (!dev || !udev_device_get_sysattr_value(dev,"idVendor") || !udev_device_get_sysattr_value(dev, "idProduct"))
+        bContinue = false;
+    }
 
-    if (!results.ContainsResult(result))
-      results.m_results.push_back(result);
+    if (bContinue)
+    {
+      strClass = udev_device_get_sysattr_value(dev, "bDeviceClass");
+      if (strClass.IsEmpty())
+        bContinue = false;
+    }
 
-    udev_device_unref(dev);
+    if (bContinue)
+    {
+      int iClass = PeripheralTypeTranslator::HexStringToInt(strClass.c_str());
+      if (iClass == USB_CLASS_PER_INTERFACE)
+      {
+        //TODO just assume this is a HID device for now, since the only devices that we're currently
+        //     interested in are HID devices
+        iClass = USB_CLASS_HID;
+      }
+
+      PeripheralScanResult result;
+      result.m_iVendorId   = PeripheralTypeTranslator::HexStringToInt(udev_device_get_sysattr_value(dev, "idVendor"));
+      result.m_iProductId  = PeripheralTypeTranslator::HexStringToInt(udev_device_get_sysattr_value(dev, "idProduct"));
+      result.m_type        = GetType(iClass);
+      result.m_strLocation = udev_device_get_syspath(dev);
+
+      if (!results.ContainsResult(result))
+        results.m_results.push_back(result);
+    }
+
+    bContinue = true;
+    if (parent)
+    {
+      /* unref the _parent_ device */
+      udev_device_unref(parent);
+      parent = NULL;
+    }
   }
   /* Free the enumerator object */
   udev_enumerate_unref(enumerate);

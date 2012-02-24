@@ -35,7 +35,6 @@
 #include "threads/SingleLock.h"
 #include "utils/log.h"
 #include "utils/TimeUtils.h"
-#include "DllLibAfp.h"
 
 using namespace XFILE;
 
@@ -69,11 +68,11 @@ void AfpConnectionLog(void *priv, enum loglevels loglevel, int logtype, const ch
 
 CAfpConnection::CAfpConnection()
  : m_OpenConnections(0)
- , m_LastActive(0)
+ , m_IdleTimeout(0)
  , m_pAfpServer(NULL)
  , m_pAfpVol(NULL)
- , m_pAfpClient((struct libafpclient*)malloc(sizeof(struct libafpclient)))
  , m_pAfpUrl((struct afp_url*)malloc(sizeof(struct afp_url)))
+ , m_pAfpClient((struct libafpclient*)malloc(sizeof(struct libafpclient)))
  , m_pLibAfp(new DllLibAfp())
  , m_bDllInited(false)
 {
@@ -116,10 +115,22 @@ bool CAfpConnection::initLib()
   return m_bDllInited;
 }
 
+//only unmount here - afpclient lib is not
+//stoppable (no afp_main_quick_shutdown as counter part
+//for afp_main_quick_startup)
+void CAfpConnection::Deinit()
+{
+  if(m_pAfpVol && m_pLibAfp->IsLoaded())
+  {
+    disconnectVolume();
+    Disconnect();
+    m_pAfpUrl->servername[0] = '\0';
+  }        
+}
+
 void CAfpConnection::Disconnect()
 {
   CSingleLock lock(*this);
-  disconnectVolume();
   m_pAfpServer = NULL;
 }
 
@@ -134,7 +145,7 @@ void CAfpConnection::disconnectVolume()
 }
 
 // taken from cmdline tool
-bool CAfpConnection::connectVolume(const char *volumename)
+bool CAfpConnection::connectVolume(const char *volumename, struct afp_volume *&pVolume)
 {
   bool ret = false;
   if (strlen(volumename) != 0)
@@ -143,23 +154,23 @@ bool CAfpConnection::connectVolume(const char *volumename)
     unsigned int len = 0;
     char mesg[1024];
 
-    if ((m_pAfpVol = m_pLibAfp->find_volume_by_name(m_pAfpServer, volumename)) == NULL)
+    if ((pVolume = m_pLibAfp->find_volume_by_name(m_pAfpServer, volumename)) == NULL)
     {
       CLog::Log(LOGDEBUG, "AFP: Could not find a volume called %s\n", volumename);
     }
     else
     {
-      m_pAfpVol->mapping = AFP_MAPPING_LOGINIDS;
-      m_pAfpVol->extra_flags |= VOLUME_EXTRA_FLAGS_NO_LOCKING;
+      pVolume->mapping = AFP_MAPPING_LOGINIDS;
+      pVolume->extra_flags |= VOLUME_EXTRA_FLAGS_NO_LOCKING;
 
-      if (m_pLibAfp->afp_connect_volume(m_pAfpVol, m_pAfpServer, mesg, &len, 1024 ))
+      if (m_pLibAfp->afp_connect_volume(pVolume, m_pAfpServer, mesg, &len, 1024 ))
       {
-        CLog::Log(LOGDEBUG, "AFP: Could not access volume %s (error: %s)\n", m_pAfpVol->volume_name, mesg);
-        m_pAfpVol = NULL;
+        CLog::Log(LOGDEBUG, "AFP: Could not access volume %s (error: %s)\n", pVolume->volume_name, mesg);
+        pVolume = NULL;
       }
       else
       {
-        CLog::Log(LOGDEBUG, "AFP: Connected to volume %s\n", m_pAfpVol->volume_name_printable);
+        CLog::Log(LOGDEBUG, "AFP: Connected to volume %s\n", pVolume->volume_name_printable);
         ret = true;
       }
     }
@@ -287,10 +298,105 @@ CAfpConnection::afpConnnectError CAfpConnection::Connect(const CURL& url)
   // if server changed reconnect volume
   if (serverChanged)
   {
-    disconnectVolume();                   // disconnect old volume
-    connectVolume(m_pAfpUrl->volumename); // connect new volume
+    connectVolume(m_pAfpUrl->volumename, m_pAfpVol); // connect new volume
   }
   return AfpOk;
+}
+
+int CAfpConnection::stat(const CURL &url, struct stat *statbuff)
+{
+  CSingleLock lock(*this);
+  CStdString strPath = gAfpConnection.GetPath(url);
+  struct afp_volume *pTmpVol = NULL;
+  struct afp_url tmpurl;
+  int iResult = -1;
+  CURL nonConstUrl(getAuthenticatedPath(url)); // we need a editable copy of the url
+
+  if (!initLib() || !m_pAfpServer)
+    return -1;
+
+  m_pLibAfp->afp_default_url(&tmpurl);
+
+  // first, try to parse the URL
+  if (m_pLibAfp->afp_parse_url(&tmpurl, nonConstUrl.Get().c_str(), 0) != 0)
+  {
+    // Okay, this isn't a real URL
+    CLog::Log(LOGDEBUG, "AFP: Could not parse url: %s!\n", nonConstUrl.Get().c_str());
+    return -1;
+  }
+
+  // if no username and password is set - use no user authent uam
+  if (strlen(tmpurl.password) == 0 && strlen(tmpurl.username) == 0)
+  {
+    // try anonymous
+    strncpy(tmpurl.uamname, "No User Authent", sizeof(tmpurl.uamname));
+    CLog::Log(LOGDEBUG, "AFP: Using anonymous authentication.");
+  }
+  else if ((nonConstUrl.GetPassWord().IsEmpty() || nonConstUrl.GetUserName().IsEmpty()))
+  {
+    // this is our current url object whe are connected to (at least we try)
+    return -1;
+  }
+
+  // we got a password in the url
+  if (!nonConstUrl.GetPassWord().IsEmpty())
+  {
+    // copy password because afp_parse_url just puts garbage into the password field :(
+    strncpy(tmpurl.password, nonConstUrl.GetPassWord().c_str(), 127);
+  }
+
+  // connect new volume
+  if(connectVolume(tmpurl.volumename, pTmpVol) && pTmpVol)
+  {
+    iResult = m_pLibAfp->afp_wrap_getattr(pTmpVol, strPath.c_str(), statbuff);
+    //unmount single volume crashs
+    //we will get rid of the mounted volume
+    //once the context is changed in connect function
+    //ppppooooorrrr!!
+    //m_pLibAfp->afp_unmount_volume(pTmpVol);
+  }
+  return iResult;
+}
+
+
+/* This is called from CApplication::ProcessSlow() and is used to tell if afp have been idle for too long */
+void CAfpConnection::CheckIfIdle()
+{
+  /* We check if there are open connections. This is done without a lock to not halt the mainthread. It should be thread safe as
+   worst case scenario is that m_OpenConnections could read 0 and then changed to 1 if this happens it will enter the if wich will lead to another check, wich is locked.  */
+  if (m_OpenConnections == 0 && m_pAfpVol != NULL)
+  { /* I've set the the maxiumum IDLE time to be 1 min and 30 sec. */
+    CSingleLock lock(*this);
+    if (m_OpenConnections == 0 /* check again - when locked */)
+    {
+      if (m_IdleTimeout > 0)
+      {
+        m_IdleTimeout--;
+      }
+      else
+      {
+        CLog::Log(LOGNOTICE, "AFP is idle. Closing the remaining connections.");
+        gAfpConnection.Deinit();
+      }
+    }
+  }
+}
+
+/* The following two function is used to keep track on how many Opened files/directories there are.
+needed for unloading the dylib*/
+void CAfpConnection::AddActiveConnection()
+{
+  CSingleLock lock(*this);
+  m_OpenConnections++;
+}
+
+void CAfpConnection::AddIdleConnection()
+{
+  CSingleLock lock(*this);
+  m_OpenConnections--;
+  /* If we close a file we reset the idle timer so that we don't have any wierd behaviours if a user
+   leaves the movie paused for a long while and then press stop */
+  m_IdleTimeout = 180;
 }
 
 CStdString CAfpConnection::GetPath(const CURL &url)
@@ -319,11 +425,14 @@ CFileAFP::CFileAFP()
  : m_fileSize(0)
  , m_fileOffset(0)
  , m_pFp(NULL)
+ , m_pAfpVol(NULL)
 {
+  gAfpConnection.AddActiveConnection();
 }
 
 CFileAFP::~CFileAFP()
 {
+  gAfpConnection.AddIdleConnection();
   Close();
 }
 
@@ -353,12 +462,13 @@ bool CFileAFP::Open(const CURL& url)
   CSingleLock lock(gAfpConnection);
   if (gAfpConnection.Connect(url) != CAfpConnection::AfpOk || !gAfpConnection.GetVolume())
     return false;
+  m_pAfpVol = gAfpConnection.GetVolume();
 
   CStdString strPath = gAfpConnection.GetPath(url);
 
-  if (gAfpConnection.GetImpl()->afp_wrap_open(gAfpConnection.GetVolume(), strPath.c_str(), O_RDONLY, &m_pFp))
+  if (gAfpConnection.GetImpl()->afp_wrap_open(m_pAfpVol, strPath.c_str(), O_RDONLY, &m_pFp))
   {
-    if (gAfpConnection.GetImpl()->afp_wrap_open(gAfpConnection.GetVolume(), URLEncode(strPath.c_str()).c_str(), O_RDONLY, &m_pFp))
+    if (gAfpConnection.GetImpl()->afp_wrap_open(m_pAfpVol, URLEncode(strPath.c_str()).c_str(), O_RDONLY, &m_pFp))
     {
       // write error to logfile
       CLog::Log(LOGINFO, "CFileAFP::Open: Unable to open file : '%s'\nunix_err:'%x' error : '%s'", strPath.c_str(), errno, strerror(errno));
@@ -434,7 +544,7 @@ int CFileAFP::Stat(const CURL& url, struct __stat64* buffer)
 unsigned int CFileAFP::Read(void *lpBuf, int64_t uiBufSize)
 {
   CSingleLock lock(gAfpConnection);
-  if (m_pFp == NULL || !gAfpConnection.GetVolume())
+  if (m_pFp == NULL || !m_pAfpVol)
     return 0;
 
   if (uiBufSize > AFP_MAX_READ_SIZE)
@@ -449,7 +559,7 @@ unsigned int CFileAFP::Read(void *lpBuf, int64_t uiBufSize)
 
 #endif
   int eof = 0;
-  int bytesRead = gAfpConnection.GetImpl()->afp_wrap_read(gAfpConnection.GetVolume(),
+  int bytesRead = gAfpConnection.GetImpl()->afp_wrap_read(m_pAfpVol,
     name, (char *)lpBuf,(size_t)uiBufSize, m_fileOffset, m_pFp, &eof);
   if (bytesRead > 0)
     m_fileOffset += bytesRead;
@@ -494,7 +604,7 @@ int64_t CFileAFP::Seek(int64_t iFilePosition, int iWhence)
 void CFileAFP::Close()
 {
   CSingleLock lock(gAfpConnection);
-  if (m_pFp != NULL && gAfpConnection.GetVolume())
+  if (m_pFp != NULL && m_pAfpVol)
   {
     CLog::Log(LOGDEBUG, "CFileAFP::Close closing fd %d", m_pFp->fileid);
 #ifdef USE_CVS_AFPFS
@@ -504,16 +614,17 @@ void CFileAFP::Close()
     if (strlen(name) == 0)
       name = m_pFp->basename;
 #endif
-    gAfpConnection.GetImpl()->afp_wrap_close(gAfpConnection.GetVolume(), name, m_pFp);
+    gAfpConnection.GetImpl()->afp_wrap_close(m_pAfpVol, name, m_pFp);
     delete m_pFp;
     m_pFp = NULL;
+    m_pAfpVol = NULL;
   }
 }
 
 int CFileAFP::Write(const void* lpBuf, int64_t uiBufSize)
 {
   CSingleLock lock(gAfpConnection);
-  if (m_pFp == NULL || !gAfpConnection.GetVolume())
+  if (m_pFp == NULL || !m_pAfpVol)
    return -1;
 
   int numberOfBytesWritten = 0;
@@ -530,7 +641,7 @@ int CFileAFP::Write(const void* lpBuf, int64_t uiBufSize)
   if (strlen(name) == 0)
     name = m_pFp->basename;
 #endif
-  numberOfBytesWritten = gAfpConnection.GetImpl()->afp_wrap_write(gAfpConnection.GetVolume(),
+  numberOfBytesWritten = gAfpConnection.GetImpl()->afp_wrap_write(m_pAfpVol,
     name, (const char *)lpBuf, (size_t)uiBufSize, m_fileOffset, m_pFp, uid, gid);
 
   return numberOfBytesWritten;
@@ -586,15 +697,17 @@ bool CFileAFP::OpenForWrite(const CURL& url, bool bOverWrite)
   if (!IsValidFile(url.GetFileName()))
     return false;
 
+  m_pAfpVol = gAfpConnection.GetVolume();
+
   CStdString strPath = gAfpConnection.GetPath(url);
 
   if (bOverWrite)
   {
     CLog::Log(LOGWARNING, "FileAFP::OpenForWrite() called with overwriting enabled! - %s", strPath.c_str());
-    ret = gAfpConnection.GetImpl()->afp_wrap_creat(gAfpConnection.GetVolume(), strPath.c_str(), 0);
+    ret = gAfpConnection.GetImpl()->afp_wrap_creat(m_pAfpVol, strPath.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   }
 
-  ret = gAfpConnection.GetImpl()->afp_wrap_open(gAfpConnection.GetVolume(), strPath.c_str(), O_RDWR, &m_pFp);
+  ret = gAfpConnection.GetImpl()->afp_wrap_open(m_pAfpVol, strPath.c_str(), O_RDWR, &m_pFp);
 
   if (ret || m_pFp == NULL)
   {

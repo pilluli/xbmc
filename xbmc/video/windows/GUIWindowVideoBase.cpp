@@ -64,6 +64,8 @@
 #include "utils/URIUtils.h"
 #include "GUIUserMessages.h"
 #include "addons/Skin.h"
+#include "storage/MediaManager.h"
+#include "Autorun.h"
 
 using namespace std;
 using namespace XFILE;
@@ -139,11 +141,13 @@ bool CGUIWindowVideoBase::OnMessage(CGUIMessage& message)
         UpdateButtons();
         Update( m_vecItems->GetPath() );
       }
+#if defined(HAS_DVD_DRIVE)
       else if (iControl == CONTROL_PLAY_DVD)
       {
         // play movie...
-        CUtil::PlayDVD();
+        MEDIA_DETECT::CAutorun::PlayDiscAskResume(g_mediaManager.TranslateDevicePath(""));
       }
+#endif
       else if (iControl == CONTROL_BTNTYPE)
       {
         CGUIMessage msg(GUI_MSG_ITEM_SELECTED, GetID(), CONTROL_BTNTYPE);
@@ -258,7 +262,8 @@ void CGUIWindowVideoBase::OnInfo(CFileItem* pItem, const ADDON::ScraperPtr& scra
   if (!pItem)
     return;
 
-  if (pItem->IsParentFolder() || pItem->m_bIsShareOrDrive || pItem->GetPath().Equals("add"))
+  if (pItem->IsParentFolder() || pItem->m_bIsShareOrDrive || pItem->GetPath().Equals("add") ||
+     (pItem->IsPlayList() && !URIUtils::GetExtension(pItem->GetPath()).Equals(".strm")))
     return;
 
   // ShowIMDB can kill the item as this window can be closed while we do it,
@@ -369,21 +374,13 @@ bool CGUIWindowVideoBase::ShowIMDB(CFileItem *item, const ScraperPtr &info2)
 
     if (info->Content() == CONTENT_MOVIES)
     {
-      if (m_database.HasMovieInfo(item->GetPath()))
-      {
-        bHasInfo = true;
-        m_database.GetMovieInfo(item->GetPath(), movieDetails);
-      }
+      bHasInfo = m_database.GetMovieInfo(item->GetPath(), movieDetails);
     }
     if (info->Content() == CONTENT_TVSHOWS)
     {
       if (item->m_bIsFolder)
       {
-        if (m_database.HasTvShowInfo(item->GetPath()))
-        {
-          bHasInfo = true;
-          m_database.GetTvShowInfo(item->GetPath(), movieDetails);
-        }
+        bHasInfo = m_database.GetTvShowInfo(item->GetPath(), movieDetails);
       }
       else
       {
@@ -418,11 +415,7 @@ bool CGUIWindowVideoBase::ShowIMDB(CFileItem *item, const ScraperPtr &info2)
     }
     if (info->Content() == CONTENT_MUSICVIDEOS)
     {
-      if (m_database.HasMusicVideoInfo(item->GetPath()))
-      {
-        bHasInfo = true;
-        m_database.GetMusicVideoInfo(item->GetPath(), movieDetails);
-      }
+      bHasInfo = m_database.GetMusicVideoInfo(item->GetPath(), movieDetails);
     }
     m_database.Close();
   }
@@ -722,6 +715,7 @@ void CGUIWindowVideoBase::OnQueueItem(int iItem)
   }
 
   g_playlistPlayer.Add(PLAYLIST_VIDEO, queuedItems);
+  g_playlistPlayer.SetCurrentPlaylist(PLAYLIST_VIDEO);
   // video does not auto play on queue like music
   m_viewControl.SetSelectedItem(iItem + 1);
 }
@@ -879,7 +873,8 @@ bool CGUIWindowVideoBase::OnSelect(int iItem)
 
   CFileItemPtr item = m_vecItems->Get(iItem);
 
-  if (!item->m_bIsFolder && item->GetPath() != "add")
+  CStdString path = item->GetPath();
+  if (!item->m_bIsFolder && path != "add" && path != "addons://more/video" && path.Left(19) != "newsmartplaylist://" && path.Left(14) != "newplaylist://")
     return OnFileAction(iItem, g_guiSettings.GetInt("myvideos.selectaction"));
 
   return CGUIMediaWindow::OnSelect(iItem);
@@ -888,6 +883,10 @@ bool CGUIWindowVideoBase::OnSelect(int iItem)
 bool CGUIWindowVideoBase::OnFileAction(int iItem, int action)
 {
   CFileItemPtr item = m_vecItems->Get(iItem);
+
+  // Reset the current start offset. The actual resume
+  // option is set in the switch, based on the action passed.
+  item->m_lStartOffset = 0;
   
   switch (action)
   {
@@ -944,7 +943,8 @@ bool CGUIWindowVideoBase::OnInfo(int iItem)
 
   CFileItemPtr item = m_vecItems->Get(iItem);
 
-  if (item->GetPath().Equals("add") || item->IsParentFolder())
+  if (item->GetPath().Equals("add") || item->IsParentFolder() ||
+     (item->IsPlayList() && !URIUtils::GetExtension(item->GetPath()).Equals(".strm")))
     return false;
 
   ADDON::ScraperPtr scraper;
@@ -1127,7 +1127,7 @@ void CGUIWindowVideoBase::GetContextButtons(int itemNumber, CContextButtons &but
       {
         buttons.Add(CONTEXT_BUTTON_RESUME_ITEM, GetResumeString(*(item.get())));     // Resume Video
       }
-      if (item->HasVideoInfoTag() && !item->m_bIsFolder && item->GetVideoInfoTag()->m_iEpisode > -1)
+      if (item->HasVideoInfoTag() && !item->m_bIsFolder && m_vecItems->Size() > 1 && itemNumber < m_vecItems->Size()-1)
       {
         buttons.Add(CONTEXT_BUTTON_PLAY_AND_QUEUE, 13412);
       }
@@ -1350,6 +1350,7 @@ bool CGUIWindowVideoBase::OnPlayMedia(int iItem)
     item.SetPath(pItem->GetVideoInfoTag()->m_strFileNameAndPath);
     item.SetProperty("original_listitem_url", pItem->GetPath());
   }
+  CLog::Log(LOGDEBUG, "%s %s", __FUNCTION__, item.GetPath().c_str());
 
   PlayMovie(&item);
 
@@ -1696,9 +1697,7 @@ bool CGUIWindowVideoBase::GetDirectory(const CStdString &strDirectory, CFileItem
     items.Add(newPlaylist);
   }
 
-  m_stackingAvailable = !(items.IsTuxBox() || items.IsPlugin() ||
-                          items.IsAddonsPath() || items.IsRSS() ||
-                          items.IsInternetStream() || items.IsVideoDb());
+  m_stackingAvailable = StackingAvailable(items);
   // we may also be in a tvshow files listing
   // (ideally this should be removed, and our stack regexps tidied up if necessary
   // No "normal" episodes should stack, and multi-parts should be supported)
@@ -1710,6 +1709,13 @@ bool CGUIWindowVideoBase::GetDirectory(const CStdString &strDirectory, CFileItem
     items.Stack();
 
   return bResult;
+}
+
+bool CGUIWindowVideoBase::StackingAvailable(const CFileItemList &items) const
+{
+  return !(items.IsTuxBox()         || items.IsPlugin()  ||
+           items.IsAddonsPath()     || items.IsRSS()     ||
+           items.IsInternetStream() || items.IsVideoDb());
 }
 
 void CGUIWindowVideoBase::OnPrepareFileItems(CFileItemList &items)

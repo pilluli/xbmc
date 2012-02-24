@@ -33,21 +33,31 @@
 #include "Application.h"
 #include "utils/md5.h"
 #include "utils/Variant.h"
+#include "guilib/GUIWindowManager.h"
+
+#ifdef TARGET_WINDOWS
+#define close closesocket
+#endif
 
 #define RECEIVEBUFFER 1024
 
-#define AIRPLAY_STATUS_OK 200
-#define AIRPLAY_STATUS_NO_RESPONSE_NEEDED 1000
+#define AIRPLAY_STATUS_OK                  200
 #define AIRPLAY_STATUS_SWITCHING_PROTOCOLS 101
-#define AIRPLAY_STATUS_NEED_AUTH 401
-#define AIRPLAY_STATUS_NOT_IMPLEMENTED 501
+#define AIRPLAY_STATUS_NEED_AUTH           401
+#define AIRPLAY_STATUS_NOT_FOUND           404
+#define AIRPLAY_STATUS_METHOD_NOT_ALLOWED  405
+#define AIRPLAY_STATUS_NOT_IMPLEMENTED     501
+#define AIRPLAY_STATUS_NO_RESPONSE_NEEDED  1000
 
 CAirPlayServer *CAirPlayServer::ServerInstance = NULL;
+int CAirPlayServer::m_isPlaying = 0;
 
+#define EVENT_NONE     -1
 #define EVENT_PLAYING   0
 #define EVENT_PAUSED    1
 #define EVENT_LOADING   2
-const char *eventStrings[] = {"playing", "paused", "loading"};
+#define EVENT_STOPPED   3
+const char *eventStrings[] = {"playing", "paused", "loading", "stopped"};
 
 #define PLAYBACK_INFO  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"\
 "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n"\
@@ -88,6 +98,15 @@ const char *eventStrings[] = {"playing", "paused", "loading"};
 "</dict>\r\n"\
 "</plist>\r\n"
 
+#define PLAYBACK_INFO_NOT_READY  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"\
+"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n"\
+"<plist version=\"1.0\">\r\n"\
+"<dict>\r\n"\
+"<key>readyToPlay</key>\r\n"\
+"<false/>\r\n"\
+"</dict>\r\n"\
+"</plist>\r\n"
+
 #define SERVER_INFO  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"\
 "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n"\
 "<plist version=\"1.0\">\r\n"\
@@ -101,7 +120,7 @@ const char *eventStrings[] = {"playing", "paused", "loading"};
 "<key>protovers</key>\r\n"\
 "<string>1.0</string>\r\n"\
 "<key>srcvers</key>\r\n"\
-"<string>101.10</string>\r\n"\
+"<string>"AIRPLAY_SERVER_VERSION_STR"</string>\r\n"\
 "</dict>\r\n"\
 "</plist>\r\n"
 
@@ -310,6 +329,7 @@ CAirPlayServer::CTCPClient::CTCPClient()
   m_pLibPlist = new DllLibPlist();
 
   m_bAuthenticated = false;
+  m_lastEvent = EVENT_NONE;
 }
 
 CAirPlayServer::CTCPClient::CTCPClient(const CTCPClient& client)
@@ -361,6 +381,12 @@ void CAirPlayServer::CTCPClient::PushBuffer(CAirPlayServer *host, const char *bu
         break;
       case AIRPLAY_STATUS_NEED_AUTH:
         statusMsg = "Unauthorized";
+        break;
+      case AIRPLAY_STATUS_NOT_FOUND:
+        statusMsg = "Not Found";
+        break;
+      case AIRPLAY_STATUS_METHOD_NOT_ALLOWED:
+        statusMsg = "Method Not Allowed";
         break;
     }
 
@@ -448,17 +474,24 @@ void CAirPlayServer::CTCPClient::ComposeReverseEvent( CStdString& reverseHeader,
                                                       CStdString sessionId,
                                                       int state)
 {
+
+  if ( m_lastEvent != state )
+  { 
     switch(state)
     {
       case EVENT_PLAYING:
       case EVENT_LOADING:
       case EVENT_PAUSED:
+      case EVENT_STOPPED:      
         reverseBody.Format(EVENT_INFO, eventStrings[state]);
+        CLog::Log(LOGDEBUG, "AIRPLAY: sending event: %s", eventStrings[state]);
         break;
     }
     reverseHeader = "Content-Type: text/x-apple-plist+xml\r\n";
     reverseHeader.Format("%sContent-Length: %d",reverseHeader.c_str(),reverseBody.size());
     reverseHeader.Format("%sx-apple-session-id: %s\r\n",reverseHeader.c_str(),sessionId.c_str());
+    m_lastEvent = state;
+  }
 }
 
 void CAirPlayServer::CTCPClient::ComposeAuthRequestAnswer(CStdString& responseHeader, CStdString& responseBody)
@@ -623,6 +656,8 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
       const char* found = strstr(queryString.c_str(), "value=");
       int rate = found ? (int)(atof(found + strlen("value=")) + 0.5f) : 0;
 
+      CLog::Log(LOGDEBUG, "AIRPLAY: got request %s with rate %i", uri.c_str(), rate);
+
       if (needAuth && !checkAuthorization(authorization, method, uri))
       {
         status = AIRPLAY_STATUS_NEED_AUTH;
@@ -632,6 +667,7 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
         if (g_application.m_pPlayer && g_application.m_pPlayer->IsPlaying() && !g_application.m_pPlayer->IsPaused())
         {
           g_application.getApplicationMessenger().MediaPause();
+          ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_PAUSED);
         }
       }
       else
@@ -639,9 +675,35 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
         if (g_application.m_pPlayer && g_application.m_pPlayer->IsPlaying() && g_application.m_pPlayer->IsPaused())
         {
           g_application.getApplicationMessenger().MediaPause();
+          ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_PLAYING);
         }
       }
   }
+  
+  // The volume command is used to change playback volume.
+  // A value argument should be supplied which indicates how loud we should get.
+  // 0.000000 => silent
+  // 1.000000 => loud
+  else if (uri == "/volume")
+  {
+      const char* found = strstr(queryString.c_str(), "volume=");
+      double volume = found ? (double)(atof(found + strlen("volume="))) : 0;
+
+      CLog::Log(LOGDEBUG, "AIRPLAY: got request %s with volume %i", uri.c_str(), volume);
+
+      if (needAuth && !checkAuthorization(authorization, method, uri))
+      {
+        status = AIRPLAY_STATUS_NEED_AUTH;
+      }
+      else if (volume >= 0 && volume <= 1)
+      {
+        int oldVolume = g_application.GetVolume();
+        volume *= 100;
+        g_application.SetVolume(volume);
+        g_application.getApplicationMessenger().ShowVolumeBar(oldVolume < volume);
+      }
+  }
+
 
   // Contains a header like format in the request body which should contain a
   // Content-Location and optionally a Start-Position
@@ -649,6 +711,9 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
   {
     CStdString location;
     float position = 0.0;
+    m_lastEvent = EVENT_NONE;
+
+    CLog::Log(LOGDEBUG, "AIRPLAY: got request %s", uri.c_str());
 
     if (needAuth && !checkAuthorization(authorization, method, uri))
     {
@@ -656,7 +721,8 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
     }
     else if (contentType == "application/x-apple-binary-plist")
     {
-
+      CAirPlayServer::m_isPlaying++;    
+      
       if (m_pLibPlist->Load())
       {
         m_pLibPlist->EnableDelayedUnload(false);
@@ -673,7 +739,7 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
           {
             double tmpDouble = 0;
             m_pLibPlist->plist_get_real_val(tmpNode, &tmpDouble);
-            position = tmpDouble;
+            position = (float)tmpDouble;
           }
 
           tmpNode = m_pLibPlist->plist_dict_get_item(dict, "Content-Location");
@@ -682,7 +748,11 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
             char *tmpStr = NULL;
             m_pLibPlist->plist_get_string_val(tmpNode, &tmpStr);
             location=tmpStr;
+#ifdef TARGET_WINDOWS
+            m_pLibPlist->plist_free_string_val(tmpStr);
+#else
             free(tmpStr);
+#endif
           }
 
           if (dict)
@@ -699,6 +769,7 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
     }
     else
     {
+      CAirPlayServer::m_isPlaying++;        
       // Get URL to play
       int start = body.Find("Content-Location: ");
       if (start == -1)
@@ -713,19 +784,21 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
         start += strlen("Start-Position: ");
         int end = body.Find('\n', start);
         CStdString positionStr = body.Mid(start, end - start);
-        position = atof(positionStr.c_str());
+        position = (float)atof(positionStr.c_str());
       }
     }
 
     if (status != AIRPLAY_STATUS_NEED_AUTH)
     {
-      CFileItem fileToPlay(location, false);
+      CFileItem fileToPlay(location + "|User-Agent=AppleCoreMedia/1.0.0.8F455 (Apple†TV; U; CPU OS 4_3 like Mac OS X; de_de)", false);
       fileToPlay.SetProperty("StartPercent", position*100.0f);
       g_application.getApplicationMessenger().MediaPlay(fileToPlay);
+      ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_PLAYING);
     }
   }
 
   // Used to perform seeking (POST request) and to retrieve current player position (GET request).
+  // GET scrub seems to also set rate 1 - strange but true
   else if (uri == "/scrub")
   {
     if (needAuth && !checkAuthorization(authorization, method, uri))
@@ -734,19 +807,34 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
     }
     else if (method == "GET")
     {
+      CLog::Log(LOGDEBUG, "AIRPLAY: got GET request %s", uri.c_str());
+      
       if (g_application.m_pPlayer && g_application.m_pPlayer->GetTotalTime())
       {
         float position = ((float) g_application.m_pPlayer->GetTime()) / 1000;
         responseBody.Format("duration: %d\r\nposition: %f", g_application.m_pPlayer->GetTotalTime(), position);
+
+        //unpause media on GET scrub when paused
+        if (g_application.m_pPlayer->IsPlaying() && g_application.m_pPlayer->IsPaused())
+        {
+          g_application.getApplicationMessenger().MediaPause();
+          ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_PLAYING);
+        }
+      }
+      else 
+      {
+        status = AIRPLAY_STATUS_METHOD_NOT_ALLOWED;
       }
     }
     else
     {
       const char* found = strstr(queryString.c_str(), "position=");
+      
       if (found && g_application.m_pPlayer)
       {
         __int64 position = (__int64) (atof(found + strlen("position=")) * 1000.0);
         g_application.m_pPlayer->SeekTime(position);
+        CLog::Log(LOGDEBUG, "AIRPLAY: got POST request %s with pos %"PRId64, uri.c_str(), position);
       }
     }
   }
@@ -754,19 +842,30 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
   // Sent when media playback should be stopped
   else if (uri == "/stop")
   {
+    CLog::Log(LOGDEBUG, "AIRPLAY: got request %s", uri.c_str());
     if (needAuth && !checkAuthorization(authorization, method, uri))
     {
       status = AIRPLAY_STATUS_NEED_AUTH;
     }
     else
     {
-      g_application.getApplicationMessenger().MediaStop();
+      if (IsPlaying()) //only stop player if we started him
+      {
+        g_application.getApplicationMessenger().MediaStop();
+        CAirPlayServer::m_isPlaying--;
+      }
+      else //if we are not playing and get the stop request - we just wanna stop picture streaming
+      {
+        g_windowManager.PreviousWindow();
+      }
+      ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_STOPPED);
     }
   }
 
   // RAW JPEG data is contained in the request body
   else if (uri == "/photo")
   {
+    CLog::Log(LOGDEBUG, "AIRPLAY: got request %s", uri.c_str());
     if (needAuth && !checkAuthorization(authorization, method, uri))
     {
       status = AIRPLAY_STATUS_NEED_AUTH;
@@ -799,6 +898,8 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
     float cacheDuration = 0.0f;
     bool playing = false;
 
+    CLog::Log(LOGDEBUG, "AIRPLAY: got request %s", uri.c_str());
+
     if (needAuth && !checkAuthorization(authorization, method, uri))
     {
       status = AIRPLAY_STATUS_NEED_AUTH;
@@ -829,10 +930,17 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
         ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_PAUSED);
       }
     }
+    else
+    {
+      responseBody.Format(PLAYBACK_INFO_NOT_READY, duration, cacheDuration, position, (playing ? 1 : 0), duration);
+      responseHeader = "Content-Type: text/x-apple-plist+xml\r\n";     
+      ComposeReverseEvent(reverseHeader, reverseBody, sessionId, EVENT_STOPPED);
+    }
   }
 
   else if (uri == "/server-info")
   {
+    CLog::Log(LOGDEBUG, "AIRPLAY: got request %s", uri.c_str());
     responseBody.Format(SERVER_INFO, g_application.getNetwork().GetFirstConnectedInterface()->GetMacAddress());
     responseHeader = "Content-Type: text/x-apple-plist+xml\r\n";
   }
@@ -846,6 +954,16 @@ int CAirPlayServer::CTCPClient::ProcessRequest( CStdString& responseHeader,
   {
     // DRM, ignore for now.
   }
+  
+  else if (uri == "/setProperty")
+  {
+    status = AIRPLAY_STATUS_NOT_FOUND;
+  }
+
+  else if (uri == "/getProperty")
+  {
+    status = AIRPLAY_STATUS_NOT_FOUND;
+  }  
 
   else if (uri == "200") //response OK from the event reverse message
   {

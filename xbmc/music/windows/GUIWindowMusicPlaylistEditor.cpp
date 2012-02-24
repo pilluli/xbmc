@@ -170,6 +170,9 @@ void CGUIWindowMusicPlaylistEditor::OnPrepareFileItems(CFileItemList &items)
 {
   RetrieveMusicInfo();
 
+  // set fanart
+  SetupFanart(items);
+
   items.SetCachedMusicThumbs();
 }
 
@@ -200,7 +203,7 @@ void CGUIWindowMusicPlaylistEditor::PlayItem(int iItem)
 
 #ifdef HAS_DVD_DRIVE
   if (m_vecItems->Get(iItem)->IsDVD())
-    MEDIA_DETECT::CAutorun::PlayDisc(!MEDIA_DETECT::CAutorun::CanResumePlayDVD() || CGUIDialogYesNo::ShowAndGetInput(341, -1, -1, -1, 13404, 12021));
+    MEDIA_DETECT::CAutorun::PlayDiscAskResume(m_vecItems->Get(iItem)->GetPath());
   else
 #endif
     CGUIWindowMusicBase::PlayItem(iItem);

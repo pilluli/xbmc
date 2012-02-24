@@ -50,6 +50,8 @@ CMatrixGLES::~CMatrixGLES()
   {
     while (!m_matrices[i].empty())
     {
+      GLfloat *matrix = m_matrices[i].back();
+      delete [] matrix;
       m_matrices[i].pop_back();
     }
   }
@@ -99,7 +101,11 @@ void CMatrixGLES::PopMatrix()
   if (MODE_WITHIN_RANGE(m_matrixMode))
   {
     if (m_matrices[m_matrixMode].size() > 1)
+    { 
+      GLfloat *matrix = m_matrices[m_matrixMode].back();
+      delete [] matrix;
       m_matrices[m_matrixMode].pop_back();
+    }
     m_pMatrix = m_matrices[m_matrixMode].back();
   }
 }
@@ -339,6 +345,51 @@ void CMatrixGLES::LookAt(GLfloat eyex, GLfloat eyey, GLfloat eyez, GLfloat cente
 
   MultMatrixf(&m[0][0]);
   Translatef(-eyex, -eyey, -eyez);
+}
+
+static void __gluMultMatrixVecf(const GLfloat matrix[16], const GLfloat in[4], GLfloat out[4])
+{
+  int i;
+
+  for (i=0; i<4; i++)
+  {
+    out[i] = in[0] * matrix[0*4+i] +
+             in[1] * matrix[1*4+i] +
+             in[2] * matrix[2*4+i] +
+             in[3] * matrix[3*4+i];
+  }
+}
+
+// gluProject implementation taken from Mesa3D
+bool CMatrixGLES::Project(GLfloat objx, GLfloat objy, GLfloat objz, const GLfloat modelMatrix[16], const GLfloat projMatrix[16], const GLint viewport[4], GLfloat* winx, GLfloat* winy, GLfloat* winz)
+{
+  GLfloat in[4];
+  GLfloat out[4];
+
+  in[0]=objx;
+  in[1]=objy;
+  in[2]=objz;
+  in[3]=1.0;
+  __gluMultMatrixVecf(modelMatrix, in, out);
+  __gluMultMatrixVecf(projMatrix, out, in);
+  if (in[3] == 0.0)
+    return false;
+  in[0] /= in[3];
+  in[1] /= in[3];
+  in[2] /= in[3];
+  /* Map x, y and z to range 0-1 */
+  in[0] = in[0] * 0.5 + 0.5;
+  in[1] = in[1] * 0.5 + 0.5;
+  in[2] = in[2] * 0.5 + 0.5;
+
+  /* Map x,y to viewport */
+  in[0] = in[0] * viewport[2] + viewport[0];
+  in[1] = in[1] * viewport[3] + viewport[1];
+
+  *winx=in[0];
+  *winy=in[1];
+  *winz=in[2];
+  return true;
 }
 
 void CMatrixGLES::PrintMatrix(void)

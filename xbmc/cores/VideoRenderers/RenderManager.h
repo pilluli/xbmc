@@ -76,6 +76,7 @@ public:
   void FlipPage(volatile bool& bStop, double timestamp = 0.0, int source = -1, EFIELDSYNC sync = FS_NONE);
   unsigned int PreInit();
   void UnInit();
+  bool Flush();
 
   void AddOverlay(CDVDOverlay* o, double pts)
   {
@@ -144,13 +145,10 @@ public:
       return false;
   }
 
-  EINTERLACEMETHOD AutoInterlaceMethod()
+  EINTERLACEMETHOD AutoInterlaceMethod(EINTERLACEMETHOD mInt)
   {
     CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->AutoInterlaceMethod();
-    else
-      return VS_INTERLACEMETHOD_NONE;
+    return AutoInterlaceMethodInternal(mInt);
   }
 
   double GetPresentTime();
@@ -191,6 +189,8 @@ protected:
   void PresentBob(bool clear, DWORD flags, DWORD alpha);
   void PresentBlend(bool clear, DWORD flags, DWORD alpha);
 
+  EINTERLACEMETHOD AutoInterlaceMethodInternal(EINTERLACEMETHOD mInt);
+
   bool m_bPauseDrawing;   // true if we should pause rendering
 
   bool m_bIsStarted;
@@ -227,6 +227,7 @@ protected:
   EPRESENTSTEP     m_presentstep;
   int        m_presentsource;
   CEvent     m_presentevent;
+  CEvent     m_flushEvent;
 
 
   OVERLAY::CRenderer m_overlays;

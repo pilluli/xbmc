@@ -44,6 +44,7 @@
 #include "FileItem.h"
 #include "settings/Settings.h"
 #include "GUIInfoManager.h"
+#include "GUIUserMessages.h"
 #include "dialogs/GUIDialogSelect.h"
 #include "GUIWindowAddonBrowser.h"
 #include "utils/log.h"
@@ -126,8 +127,50 @@ bool CGUIDialogAddonSettings::OnMessage(CGUIMessage& message)
       }
       return true;
     }
+    case GUI_MSG_SETTING_UPDATED:
+    {
+      CStdString      id = message.GetStringParam(0);
+      CStdString value   = message.GetStringParam(1);
+      m_settings[id] = value;
+      if (GetFocusedControl())
+      {
+        int iControl = GetFocusedControl()->GetID();
+        CreateControls();
+        CGUIMessage msg(GUI_MSG_SETFOCUS,GetID(),iControl);
+        OnMessage(msg);
+      }
+      return true;
+    }
   }
   return CGUIDialogBoxBase::OnMessage(message);
+}
+
+bool CGUIDialogAddonSettings::OnAction(const CAction& action)
+{
+  if (action.GetID() == ACTION_DELETE_ITEM)
+  {
+    int iControl = GetFocusedControl()->GetID();
+    int controlId = CONTROL_START_SETTING;
+    const TiXmlElement* setting = GetFirstSetting();
+    UpdateFromControls();
+    while (setting)
+    {
+      if (controlId == iControl)
+      {
+        const char* id = setting->Attribute("id");
+        const char* value = setting->Attribute("default");
+        m_settings[id] = value;
+        CreateControls();
+        CGUIMessage msg(GUI_MSG_SETFOCUS,GetID(),iControl);
+        OnMessage(msg);
+        return true;
+      }
+      setting = setting->NextSiblingElement("setting");
+      controlId++;
+    }
+  }
+
+  return CGUIDialogBoxBase::OnAction(action);
 }
 
 void CGUIDialogAddonSettings::OnInitWindow()
@@ -354,7 +397,7 @@ bool CGUIDialogAddonSettings::ShowVirtualKeyboard(int iControl)
               bUseFileDirectories = find(options.begin(), options.end(), "treatasfolder") != options.end();
             }
 
-            if (CGUIDialogFileBrowser::ShowAndGetFile(localShares, strMask, label, value))
+            if (CGUIDialogFileBrowser::ShowAndGetFile(localShares, strMask, label, value, bUseThumbs, bUseFileDirectories))
               ((CGUIButtonControl*) control)->SetLabel2(value);
           }
         }
@@ -926,7 +969,9 @@ bool CGUIDialogAddonSettings::GetCondition(const CStdString &condition, const in
 
   bool bCondition = true;
   bool bCompare = true;
+  bool bControlDependend = false;//flag if the condition depends on another control
   vector<CStdString> conditionVec;
+
   if (condition.Find("+") >= 0)
     CUtil::Tokenize(condition, conditionVec, "+");
   else
@@ -944,6 +989,8 @@ bool CGUIDialogAddonSettings::GetCondition(const CStdString &condition, const in
     const CGUIControl* control2 = GetControl(controlId + atoi(condVec[1]));
     if (!control2)
       continue;
+      
+    bControlDependend = true; //once we are here - this condition depends on another control
 
     CStdString value;
     switch (control2->GetControlType())
@@ -993,6 +1040,12 @@ bool CGUIDialogAddonSettings::GetCondition(const CStdString &condition, const in
         bCondition |= (atoi(value) < atoi(condVec[2]));
     }
   }
+  
+  if (!bControlDependend)//if condition doesn't depend on another control - try if its an infobool expression
+  {
+    bCondition = g_infoManager.EvaluateBool(condition);
+  }
+  
   return bCondition;
 }
 
@@ -1104,4 +1157,11 @@ void CGUIDialogAddonSettings::DoProcess(unsigned int currentTime, CDirtyRegionLi
     else
       ((CGUIButtonControl *)control)->SetSelected(false);
   }
+}
+
+CStdString CGUIDialogAddonSettings::GetCurrentID() const
+{
+  if (m_addon)
+    return m_addon->ID();
+  return "";
 }

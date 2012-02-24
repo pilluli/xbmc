@@ -37,6 +37,7 @@
 #include "windowing/WindowingFactory.h"
 #include "dialogs/GUIDialogKaiToast.h"
 #include "guilib/Texture.h"
+#include "guilib/LocalizeStrings.h"
 #include "threads/SingleLock.h"
 #include "DllSwScale.h"
 #include "utils/log.h"
@@ -554,6 +555,20 @@ void CLinuxRendererGL::Reset()
   }
 }
 
+void CLinuxRendererGL::Flush()
+{
+  if (!m_bValidated)
+    return;
+
+  glFinish();
+
+  for (int i = 0 ; i < m_NumYV12Buffers ; i++)
+    (this->*m_textureDelete)(i);
+
+  glFinish();
+  m_bValidated = false;
+}
+
 void CLinuxRendererGL::Update(bool bPauseDrawing)
 {
   if (!m_bConfigured) return;
@@ -857,7 +872,7 @@ void CLinuxRendererGL::UpdateVideoFilter()
     break;
   }
 
-  CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, "Video Renderering", "Failed to init video filters/scalers, falling back to bilinear scaling");
+  CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, g_localizeStrings.Get(34400), g_localizeStrings.Get(34401));
   CLog::Log(LOGERROR, "GL: Falling back to bilinear due to failure to init scaler");
   if (m_pVideoFilterShader)
   {
@@ -1034,6 +1049,8 @@ void CLinuxRendererGL::UnInit()
 {
   CLog::Log(LOGDEBUG, "LinuxRendererGL: Cleaning up GL resources");
   CSingleLock lock(g_graphicsContext);
+
+  glFinish();
 
   if (m_rgbPbo)
   {
@@ -1495,7 +1512,7 @@ void CLinuxRendererGL::RenderVDPAU(int index, int field)
 void CLinuxRendererGL::RenderVAAPI(int index, int field)
 {
 #ifdef HAVE_LIBVA
-  YUVPLANE       &plane = m_buffers[index].fields[field][0];
+  YUVPLANE       &plane = m_buffers[index].fields[0][0];
   VAAPI::CHolder &va    = m_buffers[index].vaapi;
 
   if(!va.surface)
@@ -1619,9 +1636,6 @@ bool CLinuxRendererGL::RenderCapture(CRenderCapture* capture)
   if (!m_bValidated)
     return false;
 
-  // get our screen rect
-  const CRect rv = g_graphicsContext.GetViewWindow();
-
   // save current video rect
   CRect saveSize = m_destRect;
 
@@ -1640,7 +1654,7 @@ bool CLinuxRendererGL::RenderCapture(CRenderCapture* capture)
 
   Render(RENDER_FLAG_NOOSD, m_iYV12RenderBuffer);
   // read pixels
-  glReadPixels(0, rv.y2 - capture->GetHeight(), capture->GetWidth(), capture->GetHeight(),
+  glReadPixels(0, g_graphicsContext.GetHeight() - capture->GetHeight(), capture->GetWidth(), capture->GetHeight(),
                GL_BGRA, GL_UNSIGNED_BYTE, capture->GetRenderBuffer());
 
   capture->EndRender();
@@ -2995,8 +3009,31 @@ bool CLinuxRendererGL::Supports(EINTERLACEMETHOD method)
   }
 
   if(m_renderMethod & RENDER_VAAPI)
-    return false;
+  {
+#ifdef HAVE_LIBVA
+    VAAPI::CDisplayPtr disp = m_buffers[m_iYV12RenderBuffer].vaapi.display;
+    if(disp)
+    {
+      CSingleLock lock(*disp);
 
+      if(disp->support_deinterlace())
+      {
+        if( method == VS_INTERLACEMETHOD_RENDER_BOB_INVERTED
+        ||  method == VS_INTERLACEMETHOD_RENDER_BOB )
+          return true;
+      }
+    }
+#endif
+    return false;
+  }
+
+#ifdef TARGET_DARWIN
+  // YADIF too slow for HD but we have no methods to fall back
+  // to something that works so just turn it off.
+  if(method == VS_INTERLACEMETHOD_DEINTERLACE)
+    return false;
+#endif
+  
   if(method == VS_INTERLACEMETHOD_DEINTERLACE
   || method == VS_INTERLACEMETHOD_DEINTERLACE_HALF
   || method == VS_INTERLACEMETHOD_SW_BLEND)
@@ -3058,10 +3095,10 @@ EINTERLACEMETHOD CLinuxRendererGL::AutoInterlaceMethod()
     return VS_INTERLACEMETHOD_NONE;
   }
 
-  if(m_renderMethod & RENDER_VAAPI)
-    return VS_INTERLACEMETHOD_NONE;
+  if(Supports(VS_INTERLACEMETHOD_RENDER_BOB))
+    return VS_INTERLACEMETHOD_RENDER_BOB;
 
-  return VS_INTERLACEMETHOD_RENDER_BOB;
+  return VS_INTERLACEMETHOD_NONE;
 }
 
 void CLinuxRendererGL::BindPbo(YUVBUFFER& buff)

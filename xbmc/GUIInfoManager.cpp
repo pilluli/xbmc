@@ -218,6 +218,7 @@ const infomap system_labels[] =  {{ "hasnetwork",       SYSTEM_ETHERNET_LINK_ACT
                                   { "cansuspend",       SYSTEM_CAN_SUSPEND },
                                   { "canhibernate",     SYSTEM_CAN_HIBERNATE },
                                   { "canreboot",        SYSTEM_CAN_REBOOT },
+                                  { "screensaveractive",SYSTEM_SCREENSAVER_ACTIVE },
                                   { "cputemperature",   SYSTEM_CPU_TEMPERATURE },     // labels from here
                                   { "cpuusage",         SYSTEM_CPU_USAGE },
                                   { "gputemperature",   SYSTEM_GPU_TEMPERATURE },
@@ -282,7 +283,8 @@ const infomap network_labels[] = {{ "isdhcp",            NETWORK_IS_DHCP },
                                   { "ipaddress",         NETWORK_IP_ADDRESS }, //labels from here
                                   { "linkstate",         NETWORK_LINK_STATE },
                                   { "macaddress",        NETWORK_MAC_ADDRESS },
-                                  { "subnetaddress",     NETWORK_SUBNET_ADDRESS },
+                                  { "subnetaddress",     NETWORK_SUBNET_MASK }, //subnetaddress is misleading/wrong. should be deprecated. use subnetmask in stead
+                                  { "subnetmask",        NETWORK_SUBNET_MASK },
                                   { "gatewayaddress",    NETWORK_GATEWAY_ADDRESS },
                                   { "dns1address",       NETWORK_DNS1_ADDRESS },
                                   { "dns2address",       NETWORK_DNS2_ADDRESS },
@@ -973,7 +975,10 @@ int CGUIInfoManager::TranslateSingleString(const CStdString &strCondition)
       CStdString platform = info[2].name;
       if (platform == "linux") return SYSTEM_PLATFORM_LINUX;
       else if (platform == "windows") return SYSTEM_PLATFORM_WINDOWS;
-      else if (platform == "osx") return SYSTEM_PLATFORM_OSX;
+      else if (platform == "osx")  return SYSTEM_PLATFORM_OSX;
+      else if (platform == "osx")  return SYSTEM_PLATFORM_DARWIN_OSX;
+      else if (platform == "ios")  return SYSTEM_PLATFORM_DARWIN_IOS;
+      else if (platform == "atv2") return SYSTEM_PLATFORM_DARWIN_ATV2;
     }
     if (info[0].name == "musicplayer")
     { // TODO: these two don't allow duration(foo) and also don't allow more than this number of levels...
@@ -1046,7 +1051,7 @@ TIME_FORMAT CGUIInfoManager::TranslateTimeFormat(const CStdString &format)
 CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
 {
   if (info >= CONDITIONAL_LABEL_START && info <= CONDITIONAL_LABEL_END)
-    return GetSkinVariableString(info, contextWindow, false);
+    return GetSkinVariableString(info, false);
 
   CStdString strLabel;
   if (info >= MULTI_INFO_START && info <= MULTI_INFO_END)
@@ -1094,7 +1099,7 @@ CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
     URIUtils::RemoveExtension(strLabel);
     break;
   case WEATHER_PLUGIN:
-    strLabel = g_guiSettings.GetString("weather.script");
+    strLabel = g_guiSettings.GetString("weather.addon");
     break;
   case SYSTEM_DATE:
     strLabel = GetDate();
@@ -1282,7 +1287,7 @@ CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
     break;
 
   case SYSTEM_SCREEN_RESOLUTION:
-    if (g_settings.m_ResInfo[g_guiSettings.m_LookAndFeelResolution].bFullScreen)
+    if(g_Windowing.IsFullScreen())
       strLabel.Format("%ix%i@%.2fHz - %s (%02.2f fps)",
         g_settings.m_ResInfo[g_guiSettings.m_LookAndFeelResolution].iWidth,
         g_settings.m_ResInfo[g_guiSettings.m_LookAndFeelResolution].iHeight,
@@ -1389,21 +1394,22 @@ CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
   case SYSTEM_USED_MEMORY_PERCENT:
   case SYSTEM_TOTAL_MEMORY:
     {
-      MEMORYSTATUS stat;
-      GlobalMemoryStatus(&stat);
-      int iMemPercentFree = 100 - ((int)( 100.0f* (stat.dwTotalPhys - stat.dwAvailPhys)/stat.dwTotalPhys + 0.5f ));
+      MEMORYSTATUSEX stat;
+      stat.dwLength = sizeof(MEMORYSTATUSEX);
+      GlobalMemoryStatusEx(&stat);
+      int iMemPercentFree = 100 - ((int)( 100.0f* (stat.ullTotalPhys - stat.ullAvailPhys)/stat.ullTotalPhys + 0.5f ));
       int iMemPercentUsed = 100 - iMemPercentFree;
 
       if (info == SYSTEM_FREE_MEMORY)
-        strLabel.Format("%luMB", (ULONG)(stat.dwAvailPhys/MB));
+        strLabel.Format("%luMB", (ULONG)(stat.ullAvailPhys/MB));
       else if (info == SYSTEM_FREE_MEMORY_PERCENT)
         strLabel.Format("%i%%", iMemPercentFree);
       else if (info == SYSTEM_USED_MEMORY)
-        strLabel.Format("%luMB", (ULONG)((stat.dwTotalPhys - stat.dwAvailPhys)/MB));
+        strLabel.Format("%luMB", (ULONG)((stat.ullTotalPhys - stat.ullAvailPhys)/MB));
       else if (info == SYSTEM_USED_MEMORY_PERCENT)
         strLabel.Format("%i%%", iMemPercentUsed);
       else if (info == SYSTEM_TOTAL_MEMORY)
-        strLabel.Format("%luMB", (ULONG)(stat.dwTotalPhys/MB));
+        strLabel.Format("%luMB", (ULONG)(stat.ullTotalPhys/MB));
     }
     break;
   case SYSTEM_SCREEN_MODE:
@@ -1514,7 +1520,7 @@ CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
     break;
 #ifdef HAS_LCD
   case LCD_PROGRESS_BAR:
-    if (g_lcd) strLabel = g_lcd->GetProgressBar(g_application.GetTime(), g_application.GetTotalTime());
+    if (g_lcd && g_lcd->IsConnected()) strLabel = g_lcd->GetProgressBar(g_application.GetTime(), g_application.GetTotalTime());
     break;
 #endif
   case NETWORK_IP_ADDRESS:
@@ -1524,7 +1530,7 @@ CStdString CGUIInfoManager::GetLabel(int info, int contextWindow)
         return iface->GetCurrentIPAddress();
     }
     break;
-  case NETWORK_SUBNET_ADDRESS:
+  case NETWORK_SUBNET_MASK:
     {
       CNetworkInterface* iface = g_application.getNetwork().GetFirstConnectedInterface();
       if (iface)
@@ -1652,6 +1658,7 @@ bool CGUIInfoManager::GetInt(int &value, int info, int contextWindow, const CGUI
   if (info >= LISTITEM_START && info <= LISTITEM_END)
     return GetItemInt(value, item, info);
 
+  value = 0;
   switch( info )
   {
     case PLAYER_VOLUME:
@@ -1702,9 +1709,10 @@ bool CGUIInfoManager::GetInt(int &value, int info, int contextWindow, const CGUI
     case SYSTEM_FREE_MEMORY:
     case SYSTEM_USED_MEMORY:
       {
-        MEMORYSTATUS stat;
-        GlobalMemoryStatus(&stat);
-        int memPercentUsed = (int)( 100.0f* (stat.dwTotalPhys - stat.dwAvailPhys)/stat.dwTotalPhys + 0.5f );
+        MEMORYSTATUSEX stat;
+        stat.dwLength = sizeof(MEMORYSTATUSEX);
+        GlobalMemoryStatusEx(&stat);
+        int memPercentUsed = (int)( 100.0f* (stat.ullTotalPhys - stat.ullAvailPhys)/stat.ullTotalPhys + 0.5f );
         if (info == SYSTEM_FREE_MEMORY)
           value = 100 - memPercentUsed;
         else
@@ -1731,7 +1739,6 @@ bool CGUIInfoManager::GetInt(int &value, int info, int contextWindow, const CGUI
       value = g_powerManager.BatteryLevel();
       return true;
   }
-  value = 0;
   return false;
 }
 
@@ -1854,7 +1861,26 @@ bool CGUIInfoManager::GetBool(int condition1, int contextWindow, const CGUIListI
     bReturn = false;
 #endif
   else if (condition == SYSTEM_PLATFORM_OSX)
-#ifdef __APPLE__
+  // TODO: rename SYSTEM_PLATFORM_OSX to SYSTEM_PLATFORM_DARWIN after eden release.
+#ifdef TARGET_DARWIN
+    bReturn = true;
+#else
+    bReturn = false;
+#endif
+  else if (condition == SYSTEM_PLATFORM_DARWIN_OSX)
+#ifdef TARGET_DARWIN_OSX
+    bReturn = true;
+#else
+    bReturn = false;
+#endif
+  else if (condition == SYSTEM_PLATFORM_DARWIN_IOS)
+#ifdef TARGET_DARWIN_IOS
+    bReturn = true;
+#else
+    bReturn = false;
+#endif
+  else if (condition == SYSTEM_PLATFORM_DARWIN_ATV2)
+#ifdef TARGET_DARWIN_IOS_ATV2
     bReturn = true;
 #else
     bReturn = false;
@@ -1879,6 +1905,8 @@ bool CGUIInfoManager::GetBool(int condition1, int contextWindow, const CGUIListI
     bReturn = g_powerManager.CanHibernate();
   else if (condition == SYSTEM_CAN_REBOOT)
     bReturn = g_powerManager.CanReboot();
+  else if (condition == SYSTEM_SCREENSAVER_ACTIVE)
+    bReturn = g_application.IsInScreenSaver();
 
   else if (condition == PLAYER_SHOWINFO)
     bReturn = m_playerShowInfo;
@@ -1943,7 +1971,7 @@ bool CGUIInfoManager::GetBool(int condition1, int contextWindow, const CGUIListI
   {
     CGUIWindow *pWindow = GetWindowWithCondition(contextWindow, WINDOW_CONDITION_IS_MEDIA_WINDOW);
     if (pWindow)
-      bReturn = ((CGUIMediaWindow*)pWindow)->CurrentDirectory().GetProperty("isstacked")=="1";
+      bReturn = ((CGUIMediaWindow*)pWindow)->CurrentDirectory().GetProperty("isstacked").asBoolean();
   }
   else if (condition == CONTAINER_HAS_THUMB)
   {
@@ -2790,7 +2818,7 @@ CStdString CGUIInfoManager::GetMultiInfoLabel(const GUIInfo &info, int contextWi
 CStdString CGUIInfoManager::GetImage(int info, int contextWindow)
 {
   if (info >= CONDITIONAL_LABEL_START && info <= CONDITIONAL_LABEL_END)
-    return GetSkinVariableString(info, contextWindow, false);
+    return GetSkinVariableString(info, true);
 
   if (info >= MULTI_INFO_START && info <= MULTI_INFO_END)
   {
@@ -3615,9 +3643,9 @@ CStdString CGUIInfoManager::GetVersion()
 {
   CStdString tmp;
 #ifdef GIT_REV
-  tmp.Format("%s%d.%d Git:%s", VERSION_TAG, VERSION_MAJOR, VERSION_MINOR, GIT_REV);
+  tmp.Format("%d.%d%s Git:%s", VERSION_MAJOR, VERSION_MINOR, VERSION_TAG, GIT_REV);
 #else
-  tmp.Format("%s%d.%d", VERSION_TAG, VERSION_MAJOR, VERSION_MINOR);
+  tmp.Format("%d.%d%s", VERSION_MAJOR, VERSION_MINOR, VERSION_TAG);
 #endif
   return tmp;
 }
@@ -3771,7 +3799,7 @@ CStdString CGUIInfoManager::GetItemLabel(const CFileItem *item, int info)
   if (!item) return "";
 
   if (info >= CONDITIONAL_LABEL_START && info <= CONDITIONAL_LABEL_END)
-    return GetSkinVariableString(info, 0, false, item);
+    return GetSkinVariableString(info, false, item);
 
   if (info >= LISTITEM_PROPERTY_START && info - LISTITEM_PROPERTY_START < (int)m_listitemProperties.size())
   { // grab the property
@@ -4157,7 +4185,7 @@ CStdString CGUIInfoManager::GetItemLabel(const CFileItem *item, int info)
 CStdString CGUIInfoManager::GetItemImage(const CFileItem *item, int info)
 {
   if (info >= CONDITIONAL_LABEL_START && info <= CONDITIONAL_LABEL_END)
-    return GetSkinVariableString(info, 0, false, item);
+    return GetSkinVariableString(info, true, item);
 
   switch (info)
   {
@@ -4497,35 +4525,35 @@ bool CGUIInfoManager::GetLibraryBool(int condition)
   return false;
 }
 
-int CGUIInfoManager::RegisterSkinVariableString(const CSkinVariableString& info)
+int CGUIInfoManager::RegisterSkinVariableString(const CSkinVariableString* info)
 {
-  CSingleLock lock(m_critInfo);
-  int id = TranslateSkinVariableString(info.GetName());
-  if (id != 0)
-    return id;
+  if (!info)
+    return 0;
 
-  m_skinVariableStrings.push_back(info);
+  CSingleLock lock(m_critInfo);
+  m_skinVariableStrings.push_back(*info);
+  delete info;
   return CONDITIONAL_LABEL_START + m_skinVariableStrings.size() - 1;
 }
 
-int CGUIInfoManager::TranslateSkinVariableString(const CStdString& name)
+int CGUIInfoManager::TranslateSkinVariableString(const CStdString& name, int context)
 {
   for (vector<CSkinVariableString>::const_iterator it = m_skinVariableStrings.begin();
        it != m_skinVariableStrings.end(); ++it)
   {
-    if (it->GetName().Equals(name))
+    if (it->GetName().Equals(name) && it->GetContext() == context)
       return it - m_skinVariableStrings.begin() + CONDITIONAL_LABEL_START;
   }
   return 0;
 }
 
-CStdString CGUIInfoManager::GetSkinVariableString(int info, int contextWindow, 
+CStdString CGUIInfoManager::GetSkinVariableString(int info,
                                                   bool preferImage /*= false*/,
                                                   const CGUIListItem *item /*= NULL*/)
 {
   info -= CONDITIONAL_LABEL_START;
   if (info >= 0 && info < (int)m_skinVariableStrings.size())
-    return m_skinVariableStrings[info].GetValue(contextWindow, preferImage, item);
+    return m_skinVariableStrings[info].GetValue(preferImage, item);
 
   return "";
 }

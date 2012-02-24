@@ -195,6 +195,9 @@ bool CRepositoryUpdateJob::DoWork()
   database.Open();
   for (unsigned int i=0;i<addons.size();++i)
   {
+    // manager told us to feck off
+    if (ShouldCancel(0,0))
+      break;
     if (!CAddonInstaller::Get().CheckDependencies(addons[i]))
       addons[i]->Props().broken = g_localizeStrings.Get(24044);
 
@@ -252,10 +255,8 @@ VECADDONS CRepositoryUpdateJob::GrabAddons(RepositoryPtr& repo)
       CLog::Log(LOGERROR,"Repository %s returned no add-ons, listing may have failed",repo->Name().c_str());
   }
   else
-  {
     database.GetRepository(repo->ID(),addons);
-    database.SetRepoTimestamp(repo->ID(),CDateTime::GetCurrentDateTime().GetAsDBDateTime());
-  }
+  database.SetRepoTimestamp(repo->ID(),CDateTime::GetCurrentDateTime().GetAsDBDateTime());
 
   return addons;
 }

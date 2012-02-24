@@ -298,9 +298,11 @@ const id3_ucs4_t* id3_metadata_getcomment(const struct id3_tag* tag, enum id3_fi
 {
   union id3_field const *field;
   struct id3_frame const *frame;
-  const id3_ucs4_t* ucs4 = 0;
   int commentNumber = 0;
-
+//on ios use the "old" version without the bugfix from https://github.com/xbmc/xbmc/commit/e09cb07
+//because it somehow exposes a bug which leads to unreproducable crashs on id3v2 tags
+#ifdef TARGET_DARWIN_IOS
+  const id3_ucs4_t* ucs4 = 0;
   // return the first non-empty comment
   do
   {
@@ -319,6 +321,50 @@ const id3_ucs4_t* id3_metadata_getcomment(const struct id3_tag* tag, enum id3_fi
       return id3_ucs4_empty;
   }
   while (*ucs4 == 0);
+#else
+  const id3_ucs4_t* ucs4 = id3_ucs4_empty;
+
+  // return the first non-empty comment
+  do
+  {
+    frame = id3_tag_findframe(tag, ID3_FRAME_COMMENT, commentNumber++);
+
+    if (frame && frame->nfields == 4)
+    {
+      //get short description
+      field = id3_frame_field(frame, 2);
+      if (field == 0)
+        continue;
+      
+      ucs4 = id3_field_getstring(field);
+
+      // Multiple values are allowed per comment field, but storing different comment
+      // frames requires a different description for each frame. The first COMM frame
+      // encountered without a description will be used as the comment field.
+      // Source http://puddletag.sourceforge.net/source/id3.html
+      if (ucs4 && *ucs4 == 0)//if short description on this frame is empty - consider this the wanted comment frame
+      {
+        //fetch encoding of the frame
+        field = id3_frame_field(frame, 0);
+        
+        if(field == 0)
+          continue;
+          
+        *encoding = id3_field_gettextencoding(field);
+
+        //finally fetch the comment
+        field = id3_frame_field(frame, 3);
+        if (field == 0)
+          break;
+    
+        ucs4 = id3_field_getfullstring(field);
+        //done
+        break;  
+      }
+    }
+  }
+  while (frame);
+#endif//else TARGET_DARWIN_IOS
   return ucs4;
 }
 
@@ -330,7 +376,7 @@ int id3_metadata_setcomment(struct id3_tag* tag, id3_ucs4_t* value)
   frame = id3_tag_findframe(tag, ID3_FRAME_COMMENT, 0);
   if (frame == 0)
   {
-	  frame = id3_frame_new(ID3_FRAME_COMMENT);
+    frame = id3_frame_new(ID3_FRAME_COMMENT);
     id3_tag_attachframe(tag, frame);
   }
 
