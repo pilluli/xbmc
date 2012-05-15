@@ -6035,6 +6035,15 @@ msgstr ""
 
 #empty strings from id 16106 to 16199
 
+#: id:16198
+msgid "Hide unavailable"
+msgstr ""
+
+#: id:16199
+msgid "Enable availability checks"
+msgstr ""
+
+
 #: id:16200
 msgid "Operation was aborted"
 msgstr ""
