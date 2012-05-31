@@ -1151,7 +1151,7 @@ int CVideoDatabase::AddEpisode(int idShow, const CStdString& strFilenameAndPath)
 
     CStdString strSQL=PrepareSQL("insert into episode (idEpisode, idFile, idShow) values (NULL, %i, %i)", idFile, idShow);
     m_pDS->exec(strSQL.c_str());
-    return m_pDS->lastinsertid();
+    return (int)m_pDS->lastinsertid();
   }
   catch (...)
   {
@@ -2909,6 +2909,9 @@ bool CVideoDatabase::GetStreamDetails(CVideoInfoTag& tag) const
  
 bool CVideoDatabase::GetResumePoint(CVideoInfoTag& tag) const
 {
+  if (tag.m_iFileId < 0)
+    return false;
+
   bool match = false;
 
   try
@@ -3323,7 +3326,8 @@ bool CVideoDatabase::GetArtForItem(int mediaId, const string &mediaType, map<str
 
 string CVideoDatabase::GetArtForItem(int mediaId, const string &mediaType, const string &artType)
 {
-  return GetSingleValue("art", "url", PrepareSQL("media_id=%i AND media_type='%s' AND type='%s'", mediaId, mediaType.c_str(), artType.c_str()));
+  std::string query = PrepareSQL("SELECT url FROM art WHERE media_id=%i AND media_type='%s' AND type='%s'", mediaId, mediaType.c_str(), artType.c_str());
+  return GetSingleValue(query, m_pDS2);
 }
 
 bool CVideoDatabase::GetTvShowSeasonArt(int showId, map<int, string> &seasonArt)

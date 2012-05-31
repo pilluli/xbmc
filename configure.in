@@ -1435,7 +1435,7 @@ if test "x$use_crystalhd" != "xno"; then
     fi
     if test "x$use_crystalhd" != "xno"; then
       SAVE_CFLAGS="$CFLAGS"
-      CFLAGS="-D__LINUX_USER__ -llibcrystalhd"
+      CFLAGS="-D__LINUX_USER__ -lcrystalhd"
       # check for new crystalhd lib
       AC_COMPILE_IFELSE(
         [AC_LANG_SOURCE([#include <libcrystalhd/bc_dts_types.h>
@@ -2161,6 +2161,13 @@ XB_CONFIG_MODULE([lib/ffmpeg], [
     FFMPEG_EXTRACFLAGS="$CFLAGS $FFMPEG_EXTRACFLAGS -w -D_DARWIN_C_SOURCE -Dattribute_deprecated="
 
     ./configure --extra-cflags="$FFMPEG_EXTRACFLAGS" $ffmpg_config --as="$AS"
+
+    # if using llvm-gcc-4.2 as assembler, -MMD is not enough to generate
+    # dependency files in the right place, replace it with something that works
+    case $AS in
+      *llvm-gcc-4.2*)
+        sed -ie "s#AS_DEPFLAGS=-MMD#AS_DEPFLAGS=-MMD -MF \$(\@:.o=.d) -MT \$\@#" config.mak ;;
+    esac
 
     # ffmpeg will use yasm found at ${prefix}/bin during configure
     # but then hardcodes 'yasm' in config.mak, fix it.

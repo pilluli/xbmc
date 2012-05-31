@@ -27,6 +27,7 @@
 
 class CStreamDetails;
 class IStreamDetailsObserver;
+class CVideoDatabase;
 
 /*!
  \brief Files Availability checking classes
@@ -151,6 +152,7 @@ protected:
   virtual void OnLoaderFinish() ;
 
   IStreamDetailsObserver *m_pStreamDetailsObs;
+  CVideoDatabase *m_database;
 };
 
 class CProgramThumbLoader : public CThumbLoader

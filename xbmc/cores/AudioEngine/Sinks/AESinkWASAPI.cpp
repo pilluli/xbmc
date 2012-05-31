@@ -131,7 +131,8 @@ CAESinkWASAPI::CAESinkWASAPI() :
   m_encodedChannels(0),
   m_encodedSampleRate(0),
   m_uiBufferLen(0),
-  m_avgTimeWaiting(50)
+  m_avgTimeWaiting(50),
+  m_isDirty(false)
 {
   m_channelLayout.Reset();
 }
@@ -256,6 +257,7 @@ bool CAESinkWASAPI::Initialize(AEAudioFormat &format, std::string &device)
   EXIT_ON_FAILURE(hr, __FUNCTION__": Could not set the WASAPI event handler.");
 
   m_initialized = true;
+  m_isDirty     = false;
 
   return true;
 
@@ -292,7 +294,7 @@ void CAESinkWASAPI::Deinitialize()
 
 bool CAESinkWASAPI::IsCompatible(const AEAudioFormat format, const std::string device)
 {
-  if (!m_initialized)
+  if (!m_initialized || m_isDirty)
     return false;
 
   u_int notCompatible         = 0;
@@ -337,8 +339,10 @@ double CAESinkWASAPI::GetDelay()
   hr = m_pAudioClient->GetBufferSize(&m_uiBufferLen);
   if (FAILED(hr))
   {
+    #ifdef _DEBUG
     CLog::Log(LOGERROR, __FUNCTION__": GetBufferSize Failed : %s", WASAPIErrToStr(hr));
-    return false;
+    #endif
+    return 0.0;
   }
   return (double)m_uiBufferLen / (double)m_format.m_sampleRate;
 }
@@ -389,15 +393,21 @@ unsigned int CAESinkWASAPI::AddPackets(uint8_t *data, unsigned int frames)
     hr = m_pRenderClient->GetBuffer(NumFramesRequested, &buf);
     if (FAILED(hr))
     {
+      #ifdef _DEBUG
       CLog::Log(LOGERROR, __FUNCTION__": GetBuffer failed due to %s", WASAPIErrToStr(hr));
-      return 0;
+      #endif
+      m_isDirty = true; //flag new device or re-init needed
+      return INT_MAX;
     }
     memcpy(buf, data, NumFramesRequested * m_format.m_frameSize); //fill buffer
     hr = m_pRenderClient->ReleaseBuffer(NumFramesRequested, flags); //pass back to audio driver
     if (FAILED(hr))
     {
+      #ifdef _DEBUG
       CLog::Log(LOGDEBUG, __FUNCTION__": ReleaseBuffer failed due to %s.", WASAPIErrToStr(hr));
-      return 0;
+      #endif
+      m_isDirty = true; //flag new device or re-init needed
+      return INT_MAX;
     }
     hr = m_pAudioClient->Start(); //start the audio driver running
     if FAILED(hr)
@@ -421,7 +431,8 @@ unsigned int CAESinkWASAPI::AddPackets(uint8_t *data, unsigned int frames)
     CLog::Log(LOGERROR, __FUNCTION__": Endpoint Buffer timed out");
     m_running = false;
     m_pAudioClient->Stop(); //stop processing - we're done
-    return 0; //need better handling here
+    m_isDirty = true; //flag new device or re-init needed
+    return INT_MAX;
   }
 
 #ifndef _DEBUG
@@ -439,14 +450,18 @@ unsigned int CAESinkWASAPI::AddPackets(uint8_t *data, unsigned int frames)
   hr = m_pRenderClient->GetBuffer(NumFramesRequested, &buf);
   if (FAILED(hr))
   {
-    CLog::Log(LOGERROR, __FUNCTION__": GetBuffer failed due to %s", WASAPIErrToStr(hr));
+    #ifdef _DEBUG
+      CLog::Log(LOGERROR, __FUNCTION__": GetBuffer failed due to %s", WASAPIErrToStr(hr));
+    #endif
     return 0;
   }
   memcpy(buf, data, NumFramesRequested * m_format.m_frameSize); //fill buffer
   hr = m_pRenderClient->ReleaseBuffer(NumFramesRequested, flags); //pass back to audio driver
   if (FAILED(hr))
   {
+    #ifdef _DEBUG
     CLog::Log(LOGDEBUG, __FUNCTION__": ReleaseBuffer failed due to %s.", WASAPIErrToStr(hr));
+    #endif
     return 0;
   }
 
@@ -681,8 +696,17 @@ void CAESinkWASAPI::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
 
       for (int k = AE_CH_LAYOUT_MAX; k > 0; k--)
       {
+        DWORD mask = 0;
+        for (int c = 0; c < WASAPI_SPEAKER_COUNT; c++)
+        {
+          if (uiChannelMask & WASAPIChannelOrder[c])
+            mask |= WASAPIChannelOrder[c];
+        }
+
+        wfxex.dwChannelMask             = mask;
         wfxex.Format.nChannels          = k;
         wfxex.Format.nBlockAlign        = wfxex.Format.nChannels * (wfxex.Format.wBitsPerSample >> 3);
+        wfxex.Format.nAvgBytesPerSec    = wfxex.Format.nSamplesPerSec * wfxex.Format.nBlockAlign;
         hr = pClient->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxex.Format, NULL);
         if (SUCCEEDED(hr))
         {
