@@ -24,6 +24,7 @@
 
 #include <vector>
 #include "utils/StdString.h"
+#include "system.h"
 
 enum EncMode { ENC_NONE = 0, ENC_WEP = 1, ENC_WPA = 2, ENC_WPA2 = 3 };
 enum NetworkAssignment { NETWORK_DASH = 0, NETWORK_DHCP = 1, NETWORK_STATIC = 2, NETWORK_DISABLED = 3 };
@@ -86,6 +87,9 @@ public:
 
    CNetwork();
    virtual ~CNetwork();
+
+   // Return our hostname
+   virtual CStdString GetHostName(void);
 
    // Return the list of interfaces
    virtual std::vector<CNetworkInterface*>& GetInterfaceList(void) = 0;

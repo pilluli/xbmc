@@ -78,7 +78,7 @@ bool CDVDVideoPPFFmpeg::CheckInit(int iWidth, int iHeight)
       Dispose();
     }
 
-    m_pContext = m_dll.pp_get_context(m_pSource->iWidth, m_pSource->iHeight, PP_CPU_CAPS_MMX | PP_CPU_CAPS_MMX2 | PP_FORMAT_420);
+    m_pContext = m_dll.pp_get_context(m_pSource->iWidth, m_pSource->iHeight, PPCPUFlags() | PP_FORMAT_420);
 
     m_iInitWidth = m_pSource->iWidth;
     m_iInitHeight = m_pSource->iHeight;
@@ -93,8 +93,10 @@ bool CDVDVideoPPFFmpeg::CheckInit(int iWidth, int iHeight)
     return false;
 }
 
-void CDVDVideoPPFFmpeg::SetType(const CStdString& mType)
+void CDVDVideoPPFFmpeg::SetType(const CStdString& mType, bool deinterlace)
 {
+  m_deinterlace = deinterlace;
+
   if (mType == m_sType)
     return;
 
@@ -108,7 +110,7 @@ bool CDVDVideoPPFFmpeg::Process(DVDVideoPicture* pPicture)
 {
   m_pSource =  pPicture;
 
-  if(m_pSource->format != DVDVideoPicture::FMT_YUV420P)
+  if(m_pSource->format != RENDER_FMT_YUV420P)
     return false;
 
   if( !CheckInit(m_pSource->iWidth, m_pSource->iHeight) )
@@ -141,6 +143,8 @@ bool CDVDVideoPPFFmpeg::Process(DVDVideoPicture* pPicture)
 
   //Copy frame information over to target, but make sure it is set as allocated should decoder have forgotten
   m_pTarget->iFlags = m_pSource->iFlags | DVP_FLAG_ALLOCATED;
+  if (m_deinterlace)
+    m_pTarget->iFlags &= ~DVP_FLAG_INTERLACED;
   m_pTarget->iFrameType = m_pSource->iFrameType;
   m_pTarget->iRepeatPicture = m_pSource->iRepeatPicture;;
   m_pTarget->iDuration = m_pSource->iDuration;
@@ -151,7 +155,7 @@ bool CDVDVideoPPFFmpeg::Process(DVDVideoPicture* pPicture)
   m_pTarget->iDisplayWidth = m_pSource->iDisplayWidth;
   m_pTarget->pts = m_pSource->pts;
   m_pTarget->iGroupId = m_pSource->iGroupId;
-  m_pTarget->format = DVDVideoPicture::FMT_YUV420P;
+  m_pTarget->format = RENDER_FMT_YUV420P;
   return true;
 }
 

@@ -38,6 +38,7 @@ class CFileItemList;
 #define EXFILE_OVERWRITE 1
 #define EXFILE_AUTODELETE 2
 #define EXFILE_UNIXPATH 4
+#define EXFILE_NOCACHE 8
 #define RAR_DEFAULT_CACHE "special://temp/"
 #define RAR_DEFAULT_PASSWORD ""
 
@@ -70,7 +71,7 @@ public:
   CRarManager();
   ~CRarManager();
   bool CacheRarredFile(CStdString& strPathInCache, const CStdString& strRarPath,
-                       const CStdString& strPathInRar, BYTE bOptions = EXFILE_AUTODELETE,
+                       const CStdString& strPathInRar, uint8_t bOptions = EXFILE_AUTODELETE,
                        const CStdString& strDir =RAR_DEFAULT_CACHE, const int64_t iSize=-1);
   bool GetPathInCache(CStdString& strPathInCache, const CStdString& strRarPath,
                       const CStdString& strPathInRar = "");

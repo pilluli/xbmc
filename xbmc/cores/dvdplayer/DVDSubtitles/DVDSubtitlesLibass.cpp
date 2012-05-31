@@ -25,6 +25,7 @@
 #include "settings/GUISettings.h"
 #include "utils/log.h"
 #include "threads/SingleLock.h"
+#include "threads/Atomics.h"
 
 using namespace std;
 
@@ -63,7 +64,7 @@ CDVDSubtitlesLibass::CDVDSubtitlesLibass()
   CLog::Log(LOGINFO, "CDVDSubtitlesLibass: Initializing ASS library font settings");
   // libass uses fontconfig (system lib) which is not wrapped
   //  so translate the path before calling into libass
-  m_dll.ass_set_fonts_dir(m_library,  _P(strPath).c_str());
+  m_dll.ass_set_fonts_dir(m_library,  CSpecialProtocol::TranslatePath(strPath).c_str());
   m_dll.ass_set_extract_fonts(m_library, 1);
   m_dll.ass_set_style_overrides(m_library, NULL);
 
@@ -77,13 +78,15 @@ CDVDSubtitlesLibass::CDVDSubtitlesLibass()
   //Setting default font to the Arial in \media\fonts (used if FontConfig fails)
   strPath = "special://xbmc/media/Fonts/";
   strPath += g_guiSettings.GetString("subtitles.font");
+  int fc = !g_guiSettings.GetBool("subtitles.overrideassfonts");
 
   m_dll.ass_set_margins(m_renderer, 0, 0, 0, 0);
   m_dll.ass_set_use_margins(m_renderer, 0);
   m_dll.ass_set_font_scale(m_renderer, 1);
+
   // libass uses fontconfig (system lib) which is not wrapped
   //  so translate the path before calling into libass
-  m_dll.ass_set_fonts(m_renderer, _P(strPath).c_str(), "", 1, NULL, 0);
+  m_dll.ass_set_fonts(m_renderer, CSpecialProtocol::TranslatePath(strPath).c_str(), "Arial", fc, NULL, 1);
 }
 
 
@@ -147,28 +150,7 @@ bool CDVDSubtitlesLibass::CreateTrack(char* buf)
   return true;
 }
 
-
-long CDVDSubtitlesLibass::Acquire()
-{
-  long count = InterlockedIncrement(&m_references);
-  return count;
-}
-
-long CDVDSubtitlesLibass::Release()
-{
-  long count = InterlockedDecrement(&m_references);
-  if (count == 0)
-    delete this;
-
-  return count;
-}
-
-long CDVDSubtitlesLibass::GetNrOfReferences()
-{
-  return m_references;
-}
-
-ASS_Image* CDVDSubtitlesLibass::RenderImage(int imageWidth, int imageHeight, double pts)
+ASS_Image* CDVDSubtitlesLibass::RenderImage(int imageWidth, int imageHeight, double pts, int *changes)
 {
   CSingleLock lock(m_section);
   if(!m_renderer || !m_track)
@@ -178,7 +160,7 @@ ASS_Image* CDVDSubtitlesLibass::RenderImage(int imageWidth, int imageHeight, dou
   }
 
   m_dll.ass_set_frame_size(m_renderer, imageWidth, imageHeight);
-  return m_dll.ass_render_frame(m_renderer, m_track, DVD_TIME_TO_MSEC(pts), NULL);
+  return m_dll.ass_render_frame(m_renderer, m_track, DVD_TIME_TO_MSEC(pts), changes);
 }
 
 ASS_Event* CDVDSubtitlesLibass::GetEvents()

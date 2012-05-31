@@ -19,17 +19,17 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "system.h"
 #include "signal.h"
 #include "limits.h"
 #include "threads/SingleLock.h"
-#include "guilib/AudioContext.h"
 #include "ExternalPlayer.h"
 #include "windowing/WindowingFactory.h"
 #include "dialogs/GUIDialogOK.h"
 #include "guilib/GUIWindowManager.h"
 #include "Application.h"
-#include "filesystem/FileMusicDatabase.h"
+#include "filesystem/MusicDatabaseFile.h"
 #include "FileItem.h"
 #include "utils/RegExp.h"
 #include "utils/StringUtils.h"
@@ -63,7 +63,7 @@ extern HWND g_hWnd;
 
 CExternalPlayer::CExternalPlayer(IPlayerCallback& callback)
     : IPlayer(callback),
-      CThread()
+      CThread("CExternalPlayer")
 {
   m_bAbortRequest = false;
   m_bIsPlaying = false;
@@ -97,7 +97,7 @@ bool CExternalPlayer::OpenFile(const CFileItem& file, const CPlayerOptions &opti
   try
   {
     m_bIsPlaying = true;
-    m_launchFilename = file.m_strPath;
+    m_launchFilename = file.GetPath();
     CLog::Log(LOGNOTICE, "%s: %s", __FUNCTION__, m_launchFilename.c_str());
     Create();
 
@@ -134,8 +134,6 @@ bool CExternalPlayer::IsPlaying() const
 
 void CExternalPlayer::Process()
 {
-  SetName("CExternalPlayer");
-
   CStdString mainFile = m_launchFilename;
   CStdString archiveContent = "";
 
@@ -150,7 +148,7 @@ void CExternalPlayer::Process()
       archiveContent = url.GetFileName();
     }
     if (protocol == "musicdb")
-      mainFile = CFileMusicDatabase::TranslateUrl(url);
+      mainFile = CMusicDatabaseFile::TranslateUrl(url);
   }
 
   if (m_filenameReplacers.size() > 0) 
@@ -244,13 +242,6 @@ void CExternalPlayer::Process()
     strFArgs.append("\"");
   }
 
-  int iActiveDevice = g_audioContext.GetActiveDevice();
-  if (iActiveDevice != CAudioContext::NONE)
-  {
-    CLog::Log(LOGNOTICE, "%s: Releasing audio device %d", __FUNCTION__, iActiveDevice);
-    g_audioContext.SetActiveDevice(CAudioContext::NONE);
-  }
-
 #if defined(_WIN32)
   if (m_warpcursor)
   {
@@ -295,14 +286,14 @@ void CExternalPlayer::Process()
   LockSetForegroundWindow(LSFW_UNLOCK);
 #endif
 
-  m_playbackStartTime = CTimeUtils::GetTimeMS();
+  m_playbackStartTime = XbmcThreads::SystemClockMillis();
   BOOL ret = TRUE;
 #if defined(_WIN32)
   ret = ExecuteAppW32(strFName.c_str(),strFArgs.c_str());
 #elif defined(_LINUX)
   ret = ExecuteAppLinux(strFArgs.c_str());
 #endif
-  int64_t elapsedMillis = CTimeUtils::GetTimeMS() - m_playbackStartTime;
+  int64_t elapsedMillis = XbmcThreads::SystemClockMillis() - m_playbackStartTime;
 
   if (ret && (m_islauncher || elapsedMillis < LAUNCHER_PROCESS_TIME))
   {
@@ -361,12 +352,6 @@ void CExternalPlayer::Process()
   // We don't want to come back to an active screensaver
   g_application.ResetScreenSaver();
   g_application.WakeUpScreenSaverAndDPMS();
-
-  if (iActiveDevice != CAudioContext::NONE)
-  {
-    CLog::Log(LOGNOTICE, "%s: Reclaiming audio device %d", __FUNCTION__, iActiveDevice);
-    g_audioContext.SetActiveDevice(iActiveDevice);
-  }
 
   if (!ret || (m_playOneStackItem && g_application.CurrentFileItem().IsStack()))
     m_callback.OnPlayBackStopped();
@@ -518,8 +503,8 @@ void CExternalPlayer::SeekPercentage(float iPercent)
 
 float CExternalPlayer::GetPercentage()
 {
-  __int64 iTime = GetTime();
-  __int64 iTotalTime = GetTotalTime() * 1000;
+  int64_t iTime = GetTime();
+  int64_t iTotalTime = GetTotalTime() * 1000;
 
   if (iTotalTime != 0)
   {
@@ -548,13 +533,13 @@ float CExternalPlayer::GetSubTitleDelay()
   return 0.0;
 }
 
-void CExternalPlayer::SeekTime(__int64 iTime)
+void CExternalPlayer::SeekTime(int64_t iTime)
 {
 }
 
-__int64 CExternalPlayer::GetTime() // in millis
+int64_t CExternalPlayer::GetTime() // in millis
 {
-  if ((CTimeUtils::GetTimeMS() - m_playbackStartTime) / 1000 > m_playCountMinTime)
+  if ((XbmcThreads::SystemClockMillis() - m_playbackStartTime) / 1000 > m_playCountMinTime)
   {
     m_time = m_totalTime * 1000;
   }

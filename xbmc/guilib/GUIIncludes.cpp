@@ -23,8 +23,9 @@
 #include "addons/Skin.h"
 #include "GUIInfoManager.h"
 #include "utils/log.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "utils/StringUtils.h"
+#include "interfaces/info/SkinVariable.h"
 
 using namespace std;
 
@@ -84,6 +85,7 @@ void CGUIIncludes::ClearIncludes()
   m_includes.clear();
   m_defaults.clear();
   m_constants.clear();
+  m_skinvariables.clear();
   m_files.clear();
 }
 
@@ -93,7 +95,7 @@ bool CGUIIncludes::LoadIncludes(const CStdString &includeFile)
   if (HasIncludeFile(includeFile))
     return true;
 
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
   if (!doc.LoadFile(includeFile))
   {
     CLog::Log(LOGINFO, "Error loading includes.xml file (%s): %s (row=%i, col=%i)", includeFile.c_str(), doc.ErrorDesc(), doc.ErrorRow(), doc.ErrorCol());
@@ -151,6 +153,18 @@ bool CGUIIncludes::LoadIncludesFromXML(const TiXmlElement *root)
     }
     node = node->NextSiblingElement("constant");
   }
+
+  node = root->FirstChildElement("variable");
+  while (node)
+  {
+    if (node->Attribute("name") && node->FirstChild())
+    {
+      CStdString tagName = node->Attribute("name");
+      m_skinvariables.insert(make_pair(tagName, *node));
+    }
+    node = node->NextSiblingElement("variable");
+  }
+
   return true;
 }
 
@@ -212,7 +226,7 @@ void CGUIIncludes::ResolveIncludesForNode(TiXmlElement *node)
     const char *condition = include->Attribute("condition");
     if (condition)
     { // check this condition
-      if (!g_infoManager.GetBool(g_infoManager.TranslateString(condition)))
+      if (!g_infoManager.EvaluateBool(condition))
       {
         include = include->NextSiblingElement("include");
         continue;
@@ -246,12 +260,12 @@ void CGUIIncludes::ResolveIncludesForNode(TiXmlElement *node)
   TiXmlAttribute *attribute = node->FirstAttribute();
   while (attribute)
   { // check the attribute against our set
-    if (m_constantAttributes.count(attribute->NameStr()))
+    if (m_constantAttributes.count(attribute->Name()))
       attribute->SetValue(ResolveConstant(attribute->ValueStr()));
     attribute = attribute->Next();
   }
   // also do the value
-  if (node->FirstChild() && node->FirstChild()->Type() == TiXmlNode::TEXT && m_constantNodes.count(node->ValueStr()))
+  if (node->FirstChild() && node->FirstChild()->Type() == TiXmlNode::TINYXML_TEXT && m_constantNodes.count(node->ValueStr()))
     node->FirstChild()->SetValue(ResolveConstant(node->FirstChild()->ValueStr()));
 }
 
@@ -268,4 +282,12 @@ CStdString CGUIIncludes::ResolveConstant(const CStdString &constant) const
   CStdString value;
   StringUtils::JoinString(values, ",", value);
   return value;
+}
+
+const INFO::CSkinVariableString* CGUIIncludes::CreateSkinVariable(const CStdString& name, int context)
+{
+  map<CStdString, TiXmlElement>::const_iterator it = m_skinvariables.find(name);
+  if (it != m_skinvariables.end())
+    return INFO::CSkinVariable::CreateFromXML(it->second, context);
+  return NULL;
 }

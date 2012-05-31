@@ -72,17 +72,20 @@ public:
    */
   void Process(unsigned int currentTime);
 
-  /*! \brief Mark a region of the screen as dirty - used by the mouse and dim/black screensavers currently
-      Ideally this would be removed and a technique for marking the screen as dirty implemented for ssavers
-      in addition to moving the mouse rendering into the manager.
+  /*! \brief Mark the screen as dirty, forcing a redraw at the next Render()
    */
-  void MarkDirty(const CDirtyRegion &rect);
+  void MarkDirty();
+
+  /*! \brief Get the current dirty region
+   */
+  CDirtyRegionList GetDirty() { return m_tracker.GetDirtyRegions(); }
 
   /*! \brief Rendering of the current window and any dialogs
    Render is called every frame to draw the current window and any dialogs.
    It should only be called from the application thread.
+   Returns true only if it has rendered something.
    */
-  void Render();
+  bool Render();
 
   /*! \brief Per-frame updating of the current window and any dialogs
    FrameMove is called every frame to update the current window and any dialogs
@@ -105,7 +108,7 @@ public:
   void RouteToWindow(CGUIWindow* dialog);
   void AddModeless(CGUIWindow* dialog);
   void RemoveDialog(int id);
-  int GetTopMostModalDialogID() const;
+  int GetTopMostModalDialogID(bool ignoreClosing = false) const;
 
   void SendThreadMessage(CGUIMessage& message);
   void SendThreadMessage(CGUIMessage& message, int window);
@@ -135,6 +138,7 @@ private:
   void HideOverlay(CGUIWindow::OVERLAY_STATE state);
   void AddToWindowHistory(int newWindowID);
   void ClearWindowHistory();
+  void CloseWindowSync(CGUIWindow *window, int nextWindowID = 0);
   CGUIWindow *GetTopMostDialog() const;
 
   friend class CApplicationMessenger;

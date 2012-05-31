@@ -65,7 +65,7 @@ CDetectDVDMedia* CDetectDVDMedia::m_pInstance = NULL;
 CStdString CDetectDVDMedia::m_diskLabel = "";
 CStdString CDetectDVDMedia::m_diskPath = "";
 
-CDetectDVDMedia::CDetectDVDMedia()
+CDetectDVDMedia::CDetectDVDMedia() : CThread("CDetectDVDMedia")
 {
   m_bAutorun = false;
   m_bStop = false;
@@ -87,7 +87,6 @@ void CDetectDVDMedia::OnStartup()
 
 void CDetectDVDMedia::Process()
 {
-  SetName("CDetectDVDMedia");
 // for apple - currently disable this check since cdio will return null if no media is loaded
 #ifndef __APPLE__
   //Before entering loop make sure we actually have a CDrom drive
@@ -194,10 +193,6 @@ VOID CDetectDVDMedia::UpdateDvdrom()
           if ( m_DriveState != DRIVE_CLOSED_MEDIA_PRESENT)
           {
             m_DriveState = DRIVE_CLOSED_MEDIA_PRESENT;
-            // drive has been closed and is ready
-            OutputDebugString("Drive closed media present, remounting...\n");
-            CIoSupport::Dismount("Cdrom0");
-            CIoSupport::RemapDriveLetter('D', "Cdrom0");
             // Detect ISO9660(mode1/mode2) or CDDA filesystem
             DetectMediaType();
             CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0, 0, GUI_MSG_UPDATE_SOURCES);
@@ -529,5 +524,4 @@ const CStdString &CDetectDVDMedia::GetDVDPath()
 {
   return m_diskPath;
 }
-
 #endif

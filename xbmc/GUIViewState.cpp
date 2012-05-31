@@ -73,7 +73,8 @@ CGUIViewState* CGUIViewState::GetViewState(int windowId, const CFileItemList& it
   if (url.GetProtocol()=="musicsearch")
     return new CGUIViewStateMusicSearch(items);
 
-  if (items.IsSmartPlayList() || url.GetProtocol() == "upnp")
+  if (items.IsSmartPlayList() || url.GetProtocol() == "upnp" ||
+      (url.GetProtocol() == "library" && items.GetProperty("library.filter").asBoolean()))
   {
     if (items.GetContent() == "songs")
       return new CGUIViewStateMusicSmartPlaylist(items);
@@ -89,13 +90,16 @@ CGUIViewState* CGUIViewState::GetViewState(int windowId, const CFileItemList& it
       return new CGUIViewStateVideoMovies(items);
   }
 
+  if (url.GetProtocol() == "library")
+    return new CGUIViewStateLibrary(items);
+
   if (items.IsPlayList())
     return new CGUIViewStateMusicPlaylist(items);
 
   if (url.GetProtocol() == "lastfm")
     return new CGUIViewStateMusicLastFM(items);
 
-  if (items.m_strPath == "special://musicplaylists/")
+  if (items.GetPath() == "special://musicplaylists/")
     return new CGUIViewStateWindowMusicSongs(items);
 
   if (windowId==WINDOW_MUSIC_NAV)
@@ -379,7 +383,7 @@ void CGUIViewState::AddLiveTVSources()
       source.strName = (*it).strName;
       source.vecPaths = (*it).vecPaths;
       source.m_strThumbnailImage = "";
-      source.m_iDriveType = CMediaSource::SOURCE_TYPE_REMOTE;
+      source.FromNameAndPaths("video", source.strName, source.vecPaths);
       m_sources.push_back(source);
     }
   }
@@ -453,7 +457,7 @@ CGUIViewStateFromItems::CGUIViewStateFromItems(const CFileItemList &items) : CGU
   SetSortOrder(SORT_ORDER_ASC);
   if (items.IsPlugin())
   {
-    CURL url(items.m_strPath);
+    CURL url(items.GetPath());
     AddonPtr addon;
     if (CAddonMgr::Get().GetAddon(url.GetHostName(),addon) && addon)
     {
@@ -464,12 +468,27 @@ CGUIViewStateFromItems::CGUIViewStateFromItems(const CFileItemList &items) : CGU
         m_playlist = PLAYLIST_VIDEO;
     }
   }
-  LoadViewState(items.m_strPath, g_windowManager.GetActiveWindow());
+  LoadViewState(items.GetPath(), g_windowManager.GetActiveWindow());
 }
 
 void CGUIViewStateFromItems::SaveViewState()
 {
-  SaveViewToDb(m_items.m_strPath, g_windowManager.GetActiveWindow());
+  SaveViewToDb(m_items.GetPath(), g_windowManager.GetActiveWindow());
 }
 
+CGUIViewStateLibrary::CGUIViewStateLibrary(const CFileItemList &items) : CGUIViewState(items)
+{
+  AddSortMethod(SORT_METHOD_NONE, 551, LABEL_MASKS("%F", "%I", "%L", ""));  // Filename, Size | Foldername, empty
+  SetSortMethod(SORT_METHOD_NONE);
+  SetSortOrder(SORT_ORDER_NONE);
+
+  SetViewAsControl(DEFAULT_VIEW_LIST);
+
+  LoadViewState(items.GetPath(), g_windowManager.GetActiveWindow());
+}
+
+void CGUIViewStateLibrary::SaveViewState()
+{
+  SaveViewToDb(m_items.GetPath(), g_windowManager.GetActiveWindow());
+}
 

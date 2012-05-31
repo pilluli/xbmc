@@ -21,13 +21,9 @@
 
 #include "infotagvideo.h"
 #include "pyutil.h"
+#include "settings/AdvancedSettings.h"
+#include "utils/StringUtils.h"
 
-#ifndef __GNUC__
-#pragma code_seg("PY_TEXT")
-#pragma data_seg("PY_DATA")
-#pragma bss_seg("PY_BSS")
-#pragma const_seg("PY_RDATA")
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,7 +57,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetDirector(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_strDirector.c_str());
+    return Py_BuildValue((char*)"s",  StringUtils::Join(self->infoTag.m_director, g_advancedSettings.m_videoItemSeparator).c_str());
   }
 
   // InfoTagVideo_GetWritingCredits
@@ -70,7 +66,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetWritingCredits(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_strWritingCredits.c_str());
+    return Py_BuildValue((char*)"s", StringUtils::Join(self->infoTag.m_writingCredits, g_advancedSettings.m_videoItemSeparator).c_str());
   }
 
   // InfoTagVideo_GetGenre
@@ -79,7 +75,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetGenre(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_strGenre.c_str());
+    return Py_BuildValue((char*)"s", StringUtils::Join(self->infoTag.m_genre, g_advancedSettings.m_videoItemSeparator).c_str());
   }
 
   // InfoTagVideo_GetTagLine
@@ -196,7 +192,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetPremiered(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_strPremiered.c_str());
+    return Py_BuildValue((char*)"s", self->infoTag.m_premiered.GetAsLocalizedDate().c_str());
   }
 
   // InfoTagVideo_GetFirstAired
@@ -205,7 +201,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetFirstAired(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_strFirstAired.c_str());
+    return Py_BuildValue((char*)"s", self->infoTag.m_firstAired.GetAsLocalizedDate().c_str());
   }
 
   // InfoTagVideo_GetRating
@@ -232,7 +228,7 @@ namespace PYXBMC
 
   PyObject* InfoTagVideo_GetLastPlayed(InfoTagVideo *self, PyObject *args)
   {
-    return Py_BuildValue((char*)"s", self->infoTag.m_lastPlayed.c_str());
+    return Py_BuildValue((char*)"s", self->infoTag.m_lastPlayed.GetAsLocalizedDateTime().c_str());
   }
 
   PyMethodDef InfoTagVideo_methods[] = {
@@ -265,12 +261,6 @@ namespace PYXBMC
     "");
 
 // Restore code and data sections to normal.
-#ifndef __GNUC__
-#pragma code_seg()
-#pragma data_seg()
-#pragma bss_seg()
-#pragma const_seg()
-#endif
 
   PyTypeObject InfoTagVideo_Type;
 

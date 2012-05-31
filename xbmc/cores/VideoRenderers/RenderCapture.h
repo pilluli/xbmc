@@ -96,6 +96,9 @@ enum ECAPTURESTATE
 #define CAPTUREFLAG_CONTINUOUS  0x01 //after a render is done, render a new one immediately
 #define CAPTUREFLAG_IMMEDIATELY 0x02 //read out immediately after render, this can cause a busy wait
 
+#define CAPTUREFORMAT_BGRA 0x01
+#define CAPTUREFORMAT_RGBA 0x02
+
 class CRenderCaptureBase
 {
   public:
@@ -153,6 +156,8 @@ class CRenderCaptureBase
     bool         IsAsync()                      { return m_asyncSupported; }
 
   protected:
+    bool             UseOcclusionQuery();
+
     ECAPTURESTATE    m_state;     //state for the rendermanager
     ECAPTURESTATE    m_userState; //state for the thread that wants the capture
     int              m_flags;
@@ -169,12 +174,15 @@ class CRenderCaptureBase
 };
 
 #if defined(HAS_GL) || defined(HAS_GLES)
+#include "system_gl.h"
 
 class CRenderCaptureGL : public CRenderCaptureBase
 {
   public:
     CRenderCaptureGL();
     ~CRenderCaptureGL();
+
+    int   GetCaptureFormat();
 
     void  BeginRender();
     void  EndRender();
@@ -186,6 +194,7 @@ class CRenderCaptureGL : public CRenderCaptureBase
     void   PboToBuffer();
     GLuint m_pbo;
     GLuint m_query;
+    bool   m_occlusionQuerySupported;
 };
 
 //used instead of typedef CRenderCaptureGL CRenderCapture
@@ -203,6 +212,8 @@ class CRenderCaptureDX : public CRenderCaptureBase, public ID3DResource
   public:
     CRenderCaptureDX();
     ~CRenderCaptureDX();
+
+    int  GetCaptureFormat();
 
     void BeginRender();
     void EndRender();

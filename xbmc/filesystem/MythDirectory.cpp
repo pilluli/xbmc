@@ -209,7 +209,7 @@ bool CMythDirectory::GetGuideForChannel(const CStdString& base, CFileItemList &i
       tag->m_strPlot          = program[i].description;
       // TODO: Strip out the subtitle from the description if it is present at the start?
       // TODO: Do we need to add the subtitle to the start of the plot if not already as it used to? Seems strange, should be handled by skin?
-      tag->m_strGenre         = program[i].category; // e.g. Sports
+      tag->m_genre            = StringUtils::Split(program[i].category, g_advancedSettings.m_videoItemSeparator); // e.g. Sports
       tag->m_strAlbum         = program[i].callsign; // e.g. TV3
 
       CDateTime start(program[i].starttime);
@@ -584,12 +584,20 @@ bool CMythDirectory::Exists(const char* strPath)
 bool CMythDirectory::IsVisible(const cmyth_proginfo_t program)
 {
   CStdString group = GetValue(m_dll->proginfo_recgroup(program));
+  unsigned long flags = m_dll->proginfo_flags(program);
+
   /*
    * Ignore programs that were recorded using "LiveTV" or that have been deleted via the
    * "Auto Expire Instead of Delete Recording" option, which places the recording in the
    * "Deleted" recording group for x days rather than deleting straight away.
+   *
+   * As of 0.24, when a recording is deleted using the Myth Protocol it is marked as "pending delete"
+   * using the program flags mask. It is then scheduled to be physically deleted in a detached
+   * thread. This means that a deleted recording can still appear in the list of all recordings.
+   * Recordings that are "pending delete" will have a program flag mask that matches
+   * FL_DELETEPENDING = 0x00000080.
    */
-  return !(group.Equals("LiveTV") || group.Equals("Deleted"));
+  return !(group.Equals("LiveTV") || group.Equals("Deleted") || flags & 0x00000080);
 }
 
 bool CMythDirectory::IsMovie(const cmyth_proginfo_t program)

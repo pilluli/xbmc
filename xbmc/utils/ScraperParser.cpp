@@ -59,7 +59,7 @@ CScraperParser &CScraperParser::operator=(const CScraperParser &parser)
     if (parser.m_document)
     {
       m_scraper = parser.m_scraper;
-      m_document = new TiXmlDocument(*parser.m_document);
+      m_document = new CXBMCTinyXML(*parser.m_document);
       LoadFromXML();
     }
   }
@@ -84,7 +84,7 @@ bool CScraperParser::Load(const CStdString& strXMLFile)
 {
   Clear();
 
-  m_document = new TiXmlDocument(strXMLFile);
+  m_document = new CXBMCTinyXML(strXMLFile);
 
   if (!m_document)
     return false;
@@ -161,6 +161,18 @@ void CScraperParser::ReplaceBuffers(CStdString& strDest)
     CStdString strReplace;
     if (m_scraper)
       strReplace = m_scraper->GetSetting(strInfo);
+    strDest.replace(strDest.begin()+iIndex,strDest.begin()+iEnd+1,strReplace);
+    iIndex += strReplace.length();
+  }
+  // insert localize strings
+  iIndex = 0;
+  while ((size_t)(iIndex = strDest.find("$LOCALIZE[",iIndex)) != CStdString::npos)
+  {
+    int iEnd = strDest.Find("]",iIndex);
+    CStdString strInfo = strDest.Mid(iIndex+10,iEnd-iIndex-10);
+    CStdString strReplace;
+    if (m_scraper)
+      strReplace = m_scraper->GetString(strtol(strInfo.c_str(),NULL,10));
     strDest.replace(strDest.begin()+iIndex,strDest.begin()+iEnd+1,strReplace);
     iIndex += strReplace.length();
   }
@@ -446,6 +458,7 @@ void CScraperParser::Clean(CStdString& strDirty)
       HTML::CHTMLUtil::ConvertHTMLToW(wbuffer,wConverted);
       g_charsetConverter.fromW(wConverted,strBuffer,GetSearchStringEncoding());
       RemoveWhiteSpace(strBuffer);
+      ConvertJSON(strBuffer);
       strDirty.erase(i,i2-i+14);
       strDirty.Insert(i,strBuffer);
       i += strBuffer.size();
@@ -474,6 +487,40 @@ void CScraperParser::RemoveWhiteSpace(CStdString &string)
 {
   string.TrimLeft(" \t\r\n");
   string.TrimRight(" \t\r\n");
+}
+
+void CScraperParser::ConvertJSON(CStdString &string)
+{
+  CRegExp reg;
+  reg.RegComp("\\\\u([0-f]{4})");
+  while (reg.RegFind(string.c_str()) > -1)
+  {
+    int pos = reg.GetSubStart(1);
+    char* szReplace = reg.GetReplaceString("\\1");
+
+    CStdString replace;
+    replace.Format("&#x%s;", szReplace);
+    string.replace(string.begin()+pos-2, string.begin()+pos+4, replace);
+
+    free(szReplace);
+  }
+
+  CRegExp reg2;
+  reg2.RegComp("\\\\x([0-9]{2})([^\\\\]+;)");
+  while (reg2.RegFind(string.c_str()) > -1)
+  {
+    int pos1 = reg2.GetSubStart(1);
+    int pos2 = reg2.GetSubStart(2);
+    char* szHexValue = reg2.GetReplaceString("\\1");
+
+    CStdString replace;
+    replace.Format("%c", strtol(szHexValue, NULL, 16));
+    string.replace(string.begin()+pos1-2, string.begin()+pos2+reg2.GetSubLength(2), replace);
+
+    free(szHexValue);
+  }
+
+  string.Replace("\\\"","\"");
 }
 
 void CScraperParser::ClearBuffers()
@@ -514,7 +561,7 @@ void CScraperParser::InsertToken(CStdString& strOutput, int buf, const char* tok
   }
 }
 
-void CScraperParser::AddDocument(const TiXmlDocument* doc)
+void CScraperParser::AddDocument(const CXBMCTinyXML* doc)
 {
   const TiXmlNode* node = doc->RootElement()->FirstChild();
   while (node)

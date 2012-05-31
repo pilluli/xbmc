@@ -23,16 +23,9 @@
 
 #include <list>
 
-#if defined (HAS_GL)
-  #include "LinuxRendererGL.h"
-#elif HAS_GLES == 2
-  #include "LinuxRendererGLES.h"
-#elif defined(HAS_DX)
-  #include "WinRenderer.h"
-#elif defined(HAS_SDL)
-  #include "LinuxRenderer.h"
-#endif
-
+#include "cores/VideoRenderers/BaseRenderer.h"
+#include "guilib/Geometry.h"
+#include "guilib/Resolution.h"
 #include "threads/SharedSection.h"
 #include "threads/Thread.h"
 #include "settings/VideoSettings.h"
@@ -43,8 +36,14 @@ class CRenderCapture;
 namespace DXVA { class CProcessor; }
 namespace VAAPI { class CSurfaceHolder; }
 class CVDPAU;
+struct DVDVideoPicture;
 
 #define ERRORBUFFSIZE 30
+
+class CWinRenderer;
+class CLinuxRenderer;
+class CLinuxRendererGL;
+class CLinuxRendererGLES;
 
 class CXBMCRenderManager
 {
@@ -53,8 +52,8 @@ public:
   ~CXBMCRenderManager();
 
   // Functions called from the GUI
-  void GetVideoRect(CRect &source, CRect &dest) { CSharedLock lock(m_sharedSection); if (m_pRenderer) m_pRenderer->GetVideoRect(source, dest); };
-  float GetAspectRatio() { CSharedLock lock(m_sharedSection); if (m_pRenderer) return m_pRenderer->GetAspectRatio(); else return 1.0f; };
+  void GetVideoRect(CRect &source, CRect &dest);
+  float GetAspectRatio();
   void Update(bool bPauseDrawing);
   void RenderUpdate(bool clear, DWORD flags = 0, DWORD alpha = 255);
   void SetupScreenshot();
@@ -64,83 +63,18 @@ public:
   void Capture(CRenderCapture *capture, unsigned int width, unsigned int height, int flags);
   void ManageCaptures();
 
-  void SetViewMode(int iViewMode) { CSharedLock lock(m_sharedSection); if (m_pRenderer) m_pRenderer->SetViewMode(iViewMode); };
+  void SetViewMode(int iViewMode);
 
   // Functions called from mplayer
-  bool Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags);
+  bool Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags, ERenderFormat format, unsigned extended_format);
   bool IsConfigured();
 
-  // a call to GetImage must be followed by a call to releaseimage if getimage was successfull
-  // failure to do so will result in deadlock
-  inline int GetImage(YV12Image *image, int source = AUTOSOURCE, bool readonly = false)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->GetImage(image, source, readonly);
-    return -1;
-  }
-  inline void ReleaseImage(int source = AUTOSOURCE, bool preserve = false)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->ReleaseImage(source, preserve);
-  }
-  inline unsigned int DrawSlice(unsigned char *src[], int stride[], int w, int h, int x, int y)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->DrawSlice(src, stride, w, h, x, y);
-    return 0;
-  }
+  int AddVideoPicture(DVDVideoPicture& picture);
 
   void FlipPage(volatile bool& bStop, double timestamp = 0.0, int source = -1, EFIELDSYNC sync = FS_NONE);
   unsigned int PreInit();
   void UnInit();
-
-#ifdef HAS_DX
-  void AddProcessor(DXVA::CProcessor* processor, int64_t id)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->AddProcessor(processor, id);
-  }
-#endif
-
-#ifdef HAVE_LIBVDPAU
-  void AddProcessor(CVDPAU* vdpau)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->AddProcessor(vdpau);
-  }
-#endif
-
-#ifdef HAVE_LIBOPENMAX
-  void AddProcessor(COpenMax *openmax, DVDVideoPicture *picture)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->AddProcessor(openmax, picture);
-  }
-#endif
-
-#ifdef HAVE_LIBVA
-  void AddProcessor(VAAPI::CHolder& holder)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->AddProcessor(holder);
-  }
-#endif
-
-#ifdef HAVE_VIDEOTOOLBOXDECODER
-  void AddProcessor(CDVDVideoCodecVideoToolBox* vtb, DVDVideoPicture *picture)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->AddProcessor(vtb, picture);
-  }
-#endif
+  bool Flush();
 
   void AddOverlay(CDVDOverlay* o, double pts)
   {
@@ -154,51 +88,21 @@ public:
     m_overlays.AddCleanup(o);
   }
 
-  inline void Reset()
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      m_pRenderer->Reset();
-  }
-  RESOLUTION GetResolution()
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->GetResolution();
-    else
-      return RES_INVALID;
-  }
+  void Reset();
+
+  RESOLUTION GetResolution();
 
   float GetMaximumFPS();
   inline bool Paused() { return m_bPauseDrawing; };
   inline bool IsStarted() { return m_bIsStarted;}
+  double GetDisplayLatency() { return m_displayLatency; }
 
-  bool Supports(ERENDERFEATURE feature)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->Supports(feature);
-    else
-      return false;
-  }
+  bool Supports(ERENDERFEATURE feature);
+  bool Supports(EDEINTERLACEMODE method);
+  bool Supports(EINTERLACEMETHOD method);
+  bool Supports(ESCALINGMETHOD method);
 
-  bool Supports(EINTERLACEMETHOD method)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->Supports(method);
-    else
-      return false;
-  }
-
-  bool Supports(ESCALINGMETHOD method)
-  {
-    CSharedLock lock(m_sharedSection);
-    if (m_pRenderer)
-      return m_pRenderer->Supports(method);
-    else
-      return false;
-  }
+  EINTERLACEMETHOD AutoInterlaceMethod(EINTERLACEMETHOD mInt);
 
   double GetPresentTime();
   void  WaitPresentTime(double presenttime);
@@ -208,14 +112,19 @@ public:
   void UpdateResolution();
 
 #ifdef HAS_GL
-  CLinuxRendererGL *m_pRenderer;
+  CLinuxRendererGL    *m_pRenderer;
 #elif HAS_GLES == 2
-  CLinuxRendererGLES *m_pRenderer;
+  CLinuxRendererGLES  *m_pRenderer;
 #elif defined(HAS_DX)
-  CWinRenderer *m_pRenderer;
+  CWinRenderer        *m_pRenderer;
 #elif defined(HAS_SDL)
-  CLinuxRenderer *m_pRenderer;
+  CLinuxRenderer      *m_pRenderer;
 #endif
+
+  unsigned int GetProcessorSize();
+
+  // Supported pixel formats, can be called before configure
+  std::vector<ERenderFormat> SupportedFormats();
 
   void Present();
   void Recover(); // called after resolution switch if something special is needed
@@ -223,11 +132,14 @@ public:
   CSharedSection& GetSection() { return m_sharedSection; };
 
 protected:
+  void Render(bool clear, DWORD flags, DWORD alpha);
 
-  void PresentSingle();
-  void PresentWeave();
-  void PresentBob();
-  void PresentBlend();
+  void PresentSingle(bool clear, DWORD flags, DWORD alpha);
+  void PresentWeave(bool clear, DWORD flags, DWORD alpha);
+  void PresentBob(bool clear, DWORD flags, DWORD alpha);
+  void PresentBlend(bool clear, DWORD flags, DWORD alpha);
+
+  EINTERLACEMETHOD AutoInterlaceMethodInternal(EINTERLACEMETHOD mInt);
 
   bool m_bPauseDrawing;   // true if we should pause rendering
 
@@ -246,16 +158,28 @@ protected:
   , PRESENT_FRAME2
   };
 
+  enum EPRESENTMETHOD
+  {
+    PRESENT_METHOD_SINGLE = 0,
+    PRESENT_METHOD_BLEND,
+    PRESENT_METHOD_WEAVE,
+    PRESENT_METHOD_BOB,
+  };
+
+  double m_displayLatency;
+  void UpdateDisplayLatency();
+
   double     m_presenttime;
   double     m_presentcorr;
   double     m_presenterr;
   double     m_errorbuff[ERRORBUFFSIZE];
   int        m_errorindex;
   EFIELDSYNC m_presentfield;
-  EINTERLACEMETHOD m_presentmethod;
+  EPRESENTMETHOD m_presentmethod;
   EPRESENTSTEP     m_presentstep;
   int        m_presentsource;
   CEvent     m_presentevent;
+  CEvent     m_flushEvent;
 
 
   OVERLAY::CRenderer m_overlays;

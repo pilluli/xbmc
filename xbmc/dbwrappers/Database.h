@@ -30,7 +30,7 @@ namespace dbiplus {
 
 #include <memory>
 
-struct DatabaseSettings; // forward
+class DatabaseSettings; // forward
 
 class CDatabase
 {
@@ -42,7 +42,7 @@ public:
   bool Compress(bool bForce=true);
   void Interupt();
 
-  bool Open(DatabaseSettings &db);
+  bool Open(const DatabaseSettings &db);
 
   void BeginTransaction();
   virtual bool CommitTransaction();
@@ -62,6 +62,13 @@ public:
    * @return The requested value or an empty string if it wasn't found.
    */
   CStdString GetSingleValue(const CStdString &strTable, const CStdString &strColumn, const CStdString &strWhereClause = CStdString(), const CStdString &strOrderBy = CStdString());
+
+  /*! \brief Get a single value from a query on a dataset.
+   \param query the query in question.
+   \param ds the dataset to use for the query.
+   \return the value from the query, empty on failure.
+   */
+  std::string GetSingleValue(const std::string &query, std::auto_ptr<dbiplus::Dataset> &ds);
 
   /*!
    * @brief Delete values from a table.
@@ -112,6 +119,7 @@ protected:
 
   virtual bool Open();
   virtual bool CreateTables();
+  virtual void CreateViews() {};
   virtual bool UpdateOldVersion(int version) { return true; };
 
   virtual int GetMinVersion() const=0;
@@ -126,7 +134,7 @@ protected:
   std::auto_ptr<dbiplus::Dataset> m_pDS2;
 
 private:
-  bool Connect(DatabaseSettings &db, bool create);
+  bool Connect(const DatabaseSettings &db, bool create);
   bool UpdateVersionNumber();
 
   bool m_bMultiWrite; /*!< True if there are any queries in the queue, false otherwise */

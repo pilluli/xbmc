@@ -236,6 +236,19 @@ void CGraphicContext::RestoreViewPort()
   UpdateCameraPosition(m_cameras.top());
 }
 
+void CGraphicContext::SetScissors(const CRect &rect)
+{
+  m_scissors = rect;
+  m_scissors.Intersect(CRect(0,0,(float)m_iScreenWidth, (float)m_iScreenHeight));
+  g_Windowing.SetScissors(m_scissors);
+}
+
+void CGraphicContext::ResetScissors()
+{
+  m_scissors.SetRect(0, 0, (float)m_iScreenWidth, (float)m_iScreenHeight);
+  g_Windowing.ResetScissors(); // SetScissors(m_scissors) instead?
+}
+
 const CRect CGraphicContext::GetViewWindow() const
 {
   if (m_bCalibrating || m_bFullScreenVideo)
@@ -352,6 +365,7 @@ void CGraphicContext::SetVideoResolution(RESOLUTION res, bool forceUpdate)
   m_iScreenWidth  = g_settings.m_ResInfo[res].iWidth;
   m_iScreenHeight = g_settings.m_ResInfo[res].iHeight;
   m_iScreenId     = g_settings.m_ResInfo[res].iScreen;
+  m_scissors.SetRect(0, 0, (float)m_iScreenWidth, (float)m_iScreenHeight);
   m_Resolution    = res;
 
   //tell the videoreferenceclock that we're about to change the refreshrate
@@ -682,15 +696,19 @@ CRect CGraphicContext::generateAABB(const CRect &rect) const
 
   float z = 0.0f;
   ScaleFinalCoords(x1, y1, z);
+  g_Windowing.Project(x1, y1, z);
 
   z = 0.0f;
   ScaleFinalCoords(x2, y2, z);
+  g_Windowing.Project(x2, y2, z);
 
   z = 0.0f;
   ScaleFinalCoords(x3, y3, z);
+  g_Windowing.Project(x3, y3, z);
 
   z = 0.0f;
   ScaleFinalCoords(x4, y4, z);
+  g_Windowing.Project(x4, y4, z);
 
   return CRect( min(min(min(x1, x2), x3), x4),
                 min(min(min(y1, y2), y3), y4),
@@ -761,7 +779,7 @@ bool CGraphicContext::ToggleFullScreenRoot ()
     if (g_guiSettings.m_LookAndFeelResolution > RES_DESKTOP)
       newRes = g_guiSettings.m_LookAndFeelResolution;
     else
-      newRes = RES_DESKTOP;
+      newRes = (RESOLUTION) g_Windowing.DesktopResolution(g_Windowing.GetCurrentScreen());
     uiRes = newRes;
 
 #if defined(HAS_VIDEO_PLAYBACK)
@@ -787,9 +805,9 @@ void CGraphicContext::SetMediaDir(const CStdString &strMediaDir)
   m_strMediaDir = strMediaDir;
 }
 
-void CGraphicContext::Flip()
+void CGraphicContext::Flip(const CDirtyRegionList& dirty)
 {
-  g_Windowing.PresentRender();
+  g_Windowing.PresentRender(dirty);
 }
 
 void CGraphicContext::ApplyHardwareTransform()

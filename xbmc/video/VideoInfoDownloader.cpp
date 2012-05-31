@@ -21,10 +21,8 @@
 
 #include "VideoInfoDownloader.h"
 #include "Util.h"
-#include "utils/HTMLUtil.h"
 #include "utils/XMLUtils.h"
 #include "utils/RegExp.h"
-#include "utils/ScraperParser.h"
 #include "NfoFile.h"
 #include "dialogs/GUIDialogProgress.h"
 #include "dialogs/GUIDialogOK.h"
@@ -35,7 +33,6 @@
 #include "utils/URIUtils.h"
 
 using namespace std;
-using namespace HTML;
 
 #ifndef __GNUC__
 #pragma warning (disable:4018)
@@ -48,23 +45,25 @@ int CVideoInfoDownloader::InternalFindMovie(const CStdString &strMovie,
 {
   try
   {
-    if (!(movielist = m_info->FindMovie(m_http, strMovie, cleanChars)).empty())
-      return 1;
+    movielist = m_info->FindMovie(m_http, strMovie, cleanChars);
   }
   catch (const ADDON::CScraperError &sce)
   {
     ShowErrorDialog(sce);
-    return 1;
+    return sce.FAborted() ? 0 : -1;
   }
-  return 0;
+  return 1;  // success
 }
 
 void CVideoInfoDownloader::ShowErrorDialog(const ADDON::CScraperError &sce)
 {
-  CGUIDialogOK *pdlg = (CGUIDialogOK *)g_windowManager.GetWindow(WINDOW_DIALOG_OK);
-  pdlg->SetHeading(sce.Title());
-  pdlg->SetLine(0, sce.Message());
-  g_application.getApplicationMessenger().DoModal(pdlg, WINDOW_DIALOG_OK);
+  if (!sce.Title().empty())
+  {
+    CGUIDialogOK *pdlg = (CGUIDialogOK *)g_windowManager.GetWindow(WINDOW_DIALOG_OK);
+    pdlg->SetHeading(sce.Title());
+    pdlg->SetLine(0, sce.Message());
+    g_application.getApplicationMessenger().DoModal(pdlg, WINDOW_DIALOG_OK);
+  }
 }
 
 // threaded functions
@@ -117,7 +116,7 @@ int CVideoInfoDownloader::FindMovie(const CStdString &strMovie,
     m_state = FIND_MOVIE;
     m_strMovie = strMovie;
     m_found = 0;
-    if (ThreadHandle())
+    if (IsRunning())
       StopThread();
     Create();
     while (m_state != DO_NOTHING)
@@ -140,7 +139,7 @@ int CVideoInfoDownloader::FindMovie(const CStdString &strMovie,
   // unthreaded
   int success = InternalFindMovie(strMovie, movieList);
   // NOTE: this might be improved by rescraping if the match quality isn't high?
-  if (success && movieList.empty())
+  if (success == 1 && movieList.empty())
   { // no results. try without cleaning chars like '.' and '_'
     success = InternalFindMovie(strMovie, movieList, false);
   }
@@ -161,7 +160,7 @@ bool CVideoInfoDownloader::GetDetails(const CScraperUrl &url,
   { // threaded version
     m_state = GET_DETAILS;
     m_found = 0;
-    if (ThreadHandle())
+    if (IsRunning())
       StopThread();
     Create();
     while (!m_found)
@@ -196,7 +195,7 @@ bool CVideoInfoDownloader::GetEpisodeDetails(const CScraperUrl &url,
   { // threaded version
     m_state = GET_EPISODE_DETAILS;
     m_found = 0;
-    if (ThreadHandle())
+    if (IsRunning())
       StopThread();
     Create();
     while (!m_found)
@@ -231,7 +230,7 @@ bool CVideoInfoDownloader::GetEpisodeList(const CScraperUrl& url,
   { // threaded version
     m_state = GET_EPISODE_LIST;
     m_found = 0;
-    if (ThreadHandle())
+    if (IsRunning())
       StopThread();
     Create();
     while (!m_found)

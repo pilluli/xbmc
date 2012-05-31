@@ -23,6 +23,7 @@
 
 #include "CWIID_WiiRemote.h"
 
+#include <unistd.h>
 
 bool g_AllowReconnect = true;
 bool g_AllowMouse     = true;
@@ -98,10 +99,10 @@ void CWiiRemote::MessageCallback(cwiid_wiimote_t *wiiremote, int mesg_count, uni
     case CWIID_MESG_NUNCHUK:
       g_WiiRemote.ProcessNunchuck(mesg[i].nunchuk_mesg);
     break;
-    case CWIID_MESG_CLASSIC:
-      //Not implemented
-    break;
     case CWIID_MESG_ACC:
+    case CWIID_MESG_BALANCE:
+    case CWIID_MESG_CLASSIC:
+    case CWIID_MESG_MOTIONPLUS:
       //Not implemented
     break;
     case CWIID_MESG_UNKNOWN:
@@ -152,10 +153,11 @@ CWiiRemote::~CWiiRemote()
 /* Basicly this just sets up standard control bits */
 void CWiiRemote::SetBluetoothAddress(const char *btaddr)
 {
+  static const bdaddr_t b = {{0, 0, 0, 0, 0, 0}}; /* BDADDR_ANY */
   if (btaddr != NULL)
     str2ba(btaddr, &m_btaddr);
   else
-    bacpy(&m_btaddr, &(*BDADDR_ANY));
+    bacpy(&m_btaddr, &b);
 }
 
 void CWiiRemote::SetSensativity(float DeadX, float DeadY, int NumSamples)

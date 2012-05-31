@@ -428,6 +428,9 @@ int CDVDVideoCodecLibMpeg2::Decode(BYTE* pData, int iSize, double dts, double pt
             // make sure we send the color coeficients with the image
             pBuffer->color_matrix = m_pInfo->sequence->matrix_coefficients;
             pBuffer->color_range = 0; // mpeg2 always have th 16->235/229 color range
+            pBuffer->chroma_position = 1; // mpeg2 chroma positioning always left
+            pBuffer->color_primaries = m_pInfo->sequence->colour_primaries;
+            pBuffer->color_transfer = m_pInfo->sequence->transfer_characteristics;
 
             TagUnion u;
             u.tag.l = m_pInfo->display_picture->tag;
@@ -492,7 +495,7 @@ bool CDVDVideoCodecLibMpeg2::GetPicture(DVDVideoPicture* pDvdVideoPicture)
     if (m_bIs422)
       pDvdVideoPicture->iLineSize[2] <<= 1;
 
-    pDvdVideoPicture->format = DVDVideoPicture::FMT_YUV420P;
+    pDvdVideoPicture->format = RENDER_FMT_YUV420P;
     return true;
   }
   else

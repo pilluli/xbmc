@@ -22,16 +22,23 @@
 #import <unistd.h>
 #import <sys/mount.h>
 
+#define BOOL XBMC_BOOL 
+#include "utils/log.h"
+#undef BOOL
+
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
-#import <Carbon/Carbon.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
+#import <AudioUnit/AudioUnit.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <CoreServices/CoreServices.h>
 
 #import "CocoaInterface.h"
 #import "DllPaths_generated.h"
 
 #import "AutoPool.h"
+
 
 // hack for Cocoa_GL_ResizeWindow
 //extern "C" void SDL_SetWidthHeight(int w, int h);
@@ -69,40 +76,6 @@ int Cocoa_GL_GetCurrentDisplayID(void)
   }
   
   return((int)display_id);
-}
-
-/* 10.5 only
-void Cocoa_SetSystemSleep(bool enable)
-{
-  // kIOPMAssertionTypeNoIdleSleep prevents idle sleep
-  IOPMAssertionID assertionID;
-  IOReturn success;
-  
-  if (enable) {
-    success= IOPMAssertionCreate(kIOPMAssertionTypeNoDisplaySleep, kIOPMAssertionLevelOn, &assertionID); 
-  } else {
-    success = IOPMAssertionRelease(assertionID);
-  }
-}
-
-void Cocoa_SetDisplaySleep(bool enable)
-{
-  // kIOPMAssertionTypeNoIdleSleep prevents idle sleep
-  IOPMAssertionID assertionID;
-  IOReturn success;
-  
-  if (enable) {
-    success= IOPMAssertionCreate(kIOPMAssertionTypeNoIdleSleep, kIOPMAssertionLevelOn, &assertionID); 
-  } else {
-    success = IOPMAssertionRelease(assertionID);
-  }
-}
-*/
-
-void Cocoa_UpdateSystemActivity(void)
-{
-  // Original Author: Elan Feingold
-  UpdateSystemActivity(UsrActivity);
 }
 
 bool Cocoa_CVDisplayLinkCreate(void *displayLinkcallback, void *displayLinkContext)
@@ -179,18 +152,12 @@ double Cocoa_GetCVDisplayLinkRefreshPeriod(void)
   }
   else
   {
-    // NOTE: The refresh rate will be REPORTED AS 0 for many DVI and notebook displays.
-    CGDirectDisplayID display_id;
-    CFDictionaryRef mode;
-  
-    display_id = (CGDirectDisplayID)Cocoa_GL_GetCurrentDisplayID();
-    mode = CGDisplayCurrentMode(display_id);
-    if (mode)
-    {
-      CFNumberGetValue( (CFNumberRef)CFDictionaryGetValue(mode, kCGDisplayRefreshRate), kCFNumberDoubleType, &fps);
-      if (fps <= 0.0)
-        fps = 60.0;
-    }
+    CGDisplayModeRef display_mode;
+    display_mode = (CGDisplayModeRef)Cocoa_GL_GetCurrentDisplayID();
+    fps = CGDisplayModeGetRefreshRate(display_mode);
+    CGDisplayModeRelease(display_mode);
+    if (fps <= 0.0)
+      fps = 60.0;
   }
   
   return(fps);
@@ -198,6 +165,8 @@ double Cocoa_GetCVDisplayLinkRefreshPeriod(void)
 
 void Cocoa_DoAppleScript(const char* scriptSource)
 {
+  CCocoaAutoPool pool;
+
   NSDictionary* errorDict;
   NSAppleEventDescriptor* returnDescriptor = NULL;
   NSAppleScript* scriptObject = [[NSAppleScript alloc] initWithSource:
@@ -236,8 +205,8 @@ void Cocoa_DoAppleScriptFile(const char* filePath)
 
 const char* Cocoa_GetIconFromBundle(const char *_bundlePath, const char* _iconName)
 {
-  NSString* bundlePath = [NSString stringWithCString:_bundlePath];
-  NSString* iconName = [NSString stringWithCString:_iconName];
+  NSString* bundlePath = [NSString stringWithUTF8String:_bundlePath];
+  NSString* iconName = [NSString stringWithUTF8String:_iconName];
   NSBundle* bundle = [NSBundle bundleWithPath:bundlePath];
   NSString* iconPath = [bundle pathForResource:iconName ofType:@"icns"];
   NSString* bundleIdentifier = [bundle bundleIdentifier];
@@ -263,19 +232,18 @@ const char* Cocoa_GetIconFromBundle(const char *_bundlePath, const char* _iconNa
   return [pngFile UTF8String];
 }
 
-void Cocoa_MountPoint2DeviceName(char* path)
+char* Cocoa_MountPoint2DeviceName(char *path)
 {
+  CCocoaAutoPool pool;
   // if physical DVDs, libdvdnav wants "/dev/rdiskN" device name for OSX,
   // path will get realloc'ed and replaced IF this is a physical DVD.
   char* strDVDDevice;
   strDVDDevice = strdup(path);
-  if (strncasecmp(strDVDDevice + strlen(strDVDDevice) - 8, "VIDEO_TS", 8) == 0)
+  if (strncasecmp(strDVDDevice, "/Volumes/", 9) == 0)
   {
     struct statfs *mntbufp;
     int i, mounts;
     
-    strDVDDevice[strlen(strDVDDevice) - 9] = '\0';
-
     // find a match for /Volumes/<disk name>
     mounts = getmntinfo(&mntbufp, MNT_WAIT);  // NOT THREAD SAFE!
     for (i = 0; i < mounts; i++)
@@ -291,10 +259,12 @@ void Cocoa_MountPoint2DeviceName(char* path)
     }
     free(strDVDDevice);
   }
+  return path;
 }
 
 bool Cocoa_GetVolumeNameFromMountPoint(const char *mountPoint, CStdString &volumeName)
 {
+  CCocoaAutoPool pool;
   unsigned i, count = 0;
   struct statfs *buf = NULL;
   CStdString mountpoint, devicepath;
@@ -336,7 +306,7 @@ bool Cocoa_GetVolumeNameFromMountPoint(const char *mountPoint, CStdString &volum
   }
 
   NSString *volumename = [dd objectForKey:(NSString*)kDADiskDescriptionVolumeNameKey];
-  volumeName = [volumename cString];
+  volumeName = [volumename UTF8String];
 
   CFRelease(session);		        
   CFRelease(disk);		        
@@ -435,62 +405,6 @@ void Cocoa_HideDock()
     }
   }
 }
-void Cocoa_GetSmartFolderResults(const char* strFile, void (*CallbackFunc)(void* userData, void* userData2, const char* path), void* userData, void* userData2)
-{
-  NSString*     filePath = [[NSString alloc] initWithUTF8String:strFile];
-  NSDictionary* doc = [[NSDictionary alloc] initWithContentsOfFile:filePath];
-  NSString*     raw = [doc objectForKey:@"RawQuery"];
-  NSArray*      searchPaths = [[doc objectForKey:@"SearchCriteria"] objectForKey:@"FXScopeArrayOfPaths"];
-
-  if (raw == 0)
-    return;
-
-  // Ugh, Carbon from now on...
-  MDQueryRef query = MDQueryCreate(kCFAllocatorDefault, (CFStringRef)raw, NULL, NULL);
-  if (query)
-  {
-  	if (searchPaths)
-  	  MDQuerySetSearchScope(query, (CFArrayRef)searchPaths, 0);
-  	  
-    MDQueryExecute(query, 0);
-
-	// Keep track of when we started.
-	CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent(); 
-    for (;;)
-    {
-      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, YES);
-    
-      // If we're done or we timed out.
-      if (MDQueryIsGatheringComplete(query) == true ||
-      	  CFAbsoluteTimeGetCurrent() - startTime >= 5)
-      {
-        // Stop the query.
-        MDQueryStop(query);
-      
-    	CFIndex count = MDQueryGetResultCount(query);
-    	char title[BUFSIZ];
-    	int i;
-  
-    	for (i = 0; i < count; ++i) 
-   		{
-      	  MDItemRef resultItem = (MDItemRef)MDQueryGetResultAtIndex(query, i);
-      	  CFStringRef titleRef = (CFStringRef)MDItemCopyAttribute(resultItem, kMDItemPath);
-      
-      	  CFStringGetCString(titleRef, title, BUFSIZ, kCFStringEncodingUTF8);
-      	  CallbackFunc(userData, userData2, title);
-      	  CFRelease(titleRef);
-    	}  
-    
-        CFRelease(query);
-    	break;
-      }
-    }
-  }
-  
-  // Freeing these causes a crash when scanning for new content.
-  CFRelease(filePath);
-  CFRelease(doc);
-}
 
 static char strVersion[32];
 
@@ -524,12 +438,12 @@ bool Cocoa_HasVDADecoder()
   if (result == -1)
   {
     if (Cocoa_GetOSVersion() >= 0x1063)
-      result = access(DLL_PATH_LIBVDADECODER, 0) == 0;
+      result = (access(DLL_PATH_LIBVDADECODER, 0) == 0) ? 1:0;
     else
-      result = false;
+      result = 0;
   }
 
-  return(result);
+  return (result == 1);
 }
 
 bool Cocoa_GPUForDisplayIsNvidiaPureVideo3()
@@ -554,7 +468,7 @@ bool Cocoa_GPUForDisplayIsNvidiaPureVideo3()
   if (model)
   {
     cstr = (const char*)CFDataGetBytePtr(model);
-    if (std::string(cstr).find("NVIDIA GeForce 9400") != std::string::npos)
+    if (cstr && std::string(cstr).find("NVIDIA GeForce 9400") != std::string::npos)
       result = true;
 
     CFRelease(model);
@@ -620,43 +534,4 @@ const char *Cocoa_Paste()
   return NULL;
 }
 
-OSStatus SendAppleEventToSystemProcess(AEEventID EventToSend)
-{
-  AEAddressDesc targetDesc;
-  static const ProcessSerialNumber kPSNOfSystemProcess = { 0, kSystemProcess };
-  AppleEvent eventReply = {typeNull, NULL};
-  AppleEvent appleEventToSend = {typeNull, NULL};
-
-  OSStatus error = noErr;
-
-  error = AECreateDesc(typeProcessSerialNumber, &kPSNOfSystemProcess, 
-                       sizeof(kPSNOfSystemProcess), &targetDesc);
-
-  if (error != noErr)
-  {
-    return(error);
-  }
-
-  error = AECreateAppleEvent(kCoreEventClass, EventToSend, &targetDesc, 
-                             kAutoGenerateReturnID, kAnyTransactionID, &appleEventToSend);
-
-  AEDisposeDesc(&targetDesc);
-  if (error != noErr)
-  {
-    return(error);
-  }
-
-  error = AESend(&appleEventToSend, &eventReply, kAENoReply, 
-                 kAENormalPriority, kAEDefaultTimeout, NULL, NULL);
-
-  AEDisposeDesc(&appleEventToSend);
-  if (error != noErr)
-  {
-    return(error);
-  }
-
-  AEDisposeDesc(&eventReply);
-
-  return(error); 
-}
 #endif

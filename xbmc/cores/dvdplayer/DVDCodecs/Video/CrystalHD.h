@@ -26,49 +26,43 @@
 
 #include "DVDVideoCodec.h"
 #include "cores/dvdplayer/DVDStreamInfo.h"
+#include "threads/SingleLock.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 template <class T>
 class CSyncPtrQueue
 {
 public:
-  CSyncPtrQueue()
-  {
-    InitializeCriticalSection(&m_Lock);
-  }
-  virtual ~CSyncPtrQueue()
-  {
-    DeleteCriticalSection(&m_Lock);
-  }
+  CSyncPtrQueue() { }
+  virtual ~CSyncPtrQueue() { }
   void Push(T* p)
   {
-    EnterCriticalSection(&m_Lock);
+    CSingleLock lock(m_Lock);
     m_Queue.push_back(p);
-    LeaveCriticalSection(&m_Lock);
   }
+
   T* Pop()
   {
     T* p = NULL;
-    EnterCriticalSection(&m_Lock);
+    CSingleLock lock(m_Lock);
     if (m_Queue.size())
     {
       p = m_Queue.front();
       m_Queue.pop_front();
     }
-    LeaveCriticalSection(&m_Lock);
     return p;
   }
   unsigned int Count(){return m_Queue.size();}
 protected:
   std::deque<T*> m_Queue;
-  CRITICAL_SECTION m_Lock;
+  CCriticalSection m_Lock;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 class CPictureBuffer
 {
 public:
-  CPictureBuffer(DVDVideoPicture::EFormat format, int width, int height);
+  CPictureBuffer(ERenderFormat format, int width, int height);
   virtual ~CPictureBuffer();
 
   unsigned int  m_width;
@@ -81,7 +75,7 @@ public:
   unsigned int  m_color_range;
   unsigned int  m_color_matrix;
   uint64_t      m_PictureNumber;
-  DVDVideoPicture::EFormat m_format;
+  ERenderFormat m_format;
   unsigned char *m_y_buffer_ptr;
   unsigned char *m_u_buffer_ptr;
   unsigned char *m_v_buffer_ptr;
@@ -105,6 +99,46 @@ enum _CRYSTALHD_CODEC_TYPES
 };
 
 typedef uint32_t CRYSTALHD_CODEC_TYPE;
+
+#if (HAVE_LIBCRYSTALHD == 2)
+
+  typedef struct _BC_INFO_CRYSTAL_ {
+	  uint8_t device;
+	  union {
+		  struct {
+			  uint32_t dilRelease:8;
+			  uint32_t dilMajor:8;
+			  uint32_t dilMinor:16;
+		  };
+		  uint32_t version;
+	  } dilVersion;
+
+	  union {
+		  struct {
+			  uint32_t drvRelease:4;
+			  uint32_t drvMajor:8;
+			  uint32_t drvMinor:12;
+			  uint32_t drvBuild:8;
+		  };
+		  uint32_t version;
+	  } drvVersion;
+
+	  union {
+		  struct {
+			  uint32_t fwRelease:4;
+			  uint32_t fwMajor:8;
+			  uint32_t fwMinor:12;
+			  uint32_t fwBuild:8;
+		  };
+		  uint32_t version;
+	  } fwVersion;
+
+	  uint32_t Reserved1; // For future expansion
+	  uint32_t Reserved2; // For future expansion
+  } BC_INFO_CRYSTAL, *PBC_INFO_CRYSTAL;
+
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 #define CRYSTALHD_FIELD_FULL        0x00
@@ -169,6 +203,9 @@ protected:
 
   CMPCOutputThread *m_pOutputThread;
   CSyncPtrQueue<CPictureBuffer> m_BusyList;
+#if (HAVE_LIBCRYSTALHD == 2)
+  BC_INFO_CRYSTAL m_bc_info_crystal;
+#endif
 
 private:
   CCrystalHD();

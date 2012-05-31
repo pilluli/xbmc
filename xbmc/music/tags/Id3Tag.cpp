@@ -27,6 +27,7 @@
 #include "guilib/LocalizeStrings.h"
 #include "utils/CharsetConverter.h"
 #include "utils/log.h"
+#include "ThumbnailCache.h"
 
 #include <set>
 
@@ -85,7 +86,10 @@ bool CID3Tag::Read(const CStdString& strFile)
 
   m_tag = m_dll.id3_file_tag(id3file);
   if (!m_tag)
+  {
+    m_dll.id3_file_close(id3file);
     return false;
+  }
 
   m_musicInfoTag.SetURL(strFile);
 
@@ -124,10 +128,10 @@ bool CID3Tag::Parse()
   // TODO: Better compilation album support (should work on a flag in the table not just on the albumartist,
   //       which is localized and should instead be using a hardcoded value that we localize at presentation time)
   bool partOfCompilation = GetCompilation();
-  if (partOfCompilation && tag.GetAlbumArtist().IsEmpty())
+  if (partOfCompilation && tag.GetAlbumArtist().empty())
     tag.SetAlbumArtist(g_localizeStrings.Get(340)); // Various Artists
 
-  if (!tag.GetTitle().IsEmpty() || !tag.GetArtist().IsEmpty() || !tag.GetAlbum().IsEmpty())
+  if (!tag.GetTitle().IsEmpty() || !tag.GetArtist().empty() || !tag.GetAlbum().IsEmpty())
     tag.SetLoaded();
 
   SYSTEMTIME dateTime;
@@ -166,10 +170,10 @@ bool CID3Tag::Parse()
   // if we don't have an album tag, cache with the full file path so that
   // other non-tagged files don't get this album image
   CStdString strCoverArt;
-  if (!tag.GetAlbum().IsEmpty() && (!tag.GetAlbumArtist().IsEmpty() || !tag.GetArtist().IsEmpty()))
-    strCoverArt = CUtil::GetCachedAlbumThumb(tag.GetAlbum(), tag.GetAlbumArtist().IsEmpty() ? tag.GetArtist() : tag.GetAlbumArtist());
+  if (!tag.GetAlbum().IsEmpty() && (!tag.GetAlbumArtist().empty() || !tag.GetArtist().empty()))
+    strCoverArt = CThumbnailCache::GetAlbumThumb(&tag);
   else
-    strCoverArt = CUtil::GetCachedMusicThumb(tag.GetURL());
+    strCoverArt = CThumbnailCache::GetMusicThumb(tag.GetURL());
   if (bFound && !CUtil::ThumbExists(strCoverArt))
   {
     CStdString strExtension=GetPictureMimeType(pictype);
@@ -209,14 +213,17 @@ bool CID3Tag::Write(const CStdString& strFile)
 
   m_tag = m_dll.id3_file_tag(id3file);
   if (!m_tag)
+  {
+    m_dll.id3_file_close(id3file);
     return false;
+  }
 
   SetTitle(m_musicInfoTag.GetTitle());
-  SetArtist(m_musicInfoTag.GetArtist());
+  SetArtist(StringUtils::Join(m_musicInfoTag.GetArtist(), g_advancedSettings.m_musicItemSeparator));
   SetAlbum(m_musicInfoTag.GetAlbum());
-  SetAlbumArtist(m_musicInfoTag.GetAlbumArtist());
+  SetAlbumArtist(StringUtils::Join(m_musicInfoTag.GetAlbumArtist(), g_advancedSettings.m_musicItemSeparator));
   SetTrack(m_musicInfoTag.GetTrackNumber());
-  SetGenre(m_musicInfoTag.GetGenre());
+  SetGenre(StringUtils::Join(m_musicInfoTag.GetGenre(), g_advancedSettings.m_musicItemSeparator));
   SetYear(m_musicInfoTag.GetYearString());
   SetEncodedBy("XBMC");
 

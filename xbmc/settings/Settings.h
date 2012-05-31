@@ -21,10 +21,19 @@
  */
 
 #define PRE_SKIN_VERSION_9_10_COMPATIBILITY 1
+#define PRE_SKIN_VERSION_11_COMPATIBILITY 1
 
+//FIXME - after eden - make that one nicer somehow...
+#if defined(TARGET_DARWIN_IOS) && !defined(TARGET_DARWIN_IOS_ATV2)
+#include "system.h" //for HAS_SKIN_TOUCHED
+#endif
+
+#if defined(HAS_SKIN_TOUCHED) && defined(TARGET_DARWIN_IOS) && !defined(TARGET_DARWIN_IOS_ATV2)
+#define DEFAULT_SKIN          "skin.touched"
+#else
 #define DEFAULT_SKIN          "skin.confluence"
+#endif
 #define DEFAULT_FANART_HEIGHT 0
-#define DEFAULT_WEATHER_ADDON "weather.xbmc.builtin"
 #define DEFAULT_WEB_INTERFACE "webinterface.default"
 #ifdef MID
 #define DEFAULT_VSYNC       VSYNC_DISABLED
@@ -51,10 +60,12 @@
 #define CACHE_VIDEO 1
 #define CACHE_VOB   2
 
-#define VOLUME_MINIMUM -6000  // -60dB
-#define VOLUME_MAXIMUM 0      // 0dB
+#define VOLUME_MINIMUM 0.0f        // -60dB
+#define VOLUME_MAXIMUM 1.0f        // 0dB
+#define VOLUME_DYNAMIC_RANGE 90.0f // 60dB
+#define VOLUME_CONTROL_STEPS 90    // 90 steps
 #define VOLUME_DRC_MINIMUM 0    // 0dB
-#define VOLUME_DRC_MAXIMUM 3000 // 30dB
+#define VOLUME_DRC_MAXIMUM 6000 // 60dB
 
 #define VIEW_MODE_NORMAL        0
 #define VIEW_MODE_ZOOM          1
@@ -157,8 +168,6 @@ public:
 
   CStdString m_logFolder;
 
-  CStdString m_activeKeyboardMapping;
-
   bool m_bMyMusicSongInfoInVis;
   bool m_bMyMusicSongThumbInVis;
 
@@ -201,6 +210,7 @@ public:
   bool m_bStartVideoWindowed;
   bool m_bAddonAutoUpdate;
   bool m_bAddonNotifications;
+  bool m_bAddonForeignFilter;
 
   int m_iVideoStartWindow;
 
@@ -210,9 +220,7 @@ public:
 
   int m_HttpApiBroadcastPort;
   int m_HttpApiBroadcastLevel;
-  int m_nVolumeLevel;                     // measured in milliBels -60dB -> 0dB range.
-  int m_dynamicRangeCompressionLevel;     // measured in milliBels  0dB -> 30dB range.
-  int m_iPreMuteVolumeLevel;    // save the m_nVolumeLevel for proper restore
+  float m_fVolumeLevel;        // float 0.0 - 1.0 range
   bool m_bMute;
   int m_iSystemTimeTotalUp;    // Uptime in minutes!
 
@@ -319,6 +327,13 @@ public:
    */
   unsigned int GetCurrentProfileIndex() const { return m_currentProfile; };
 
+  /*! \brief Retrieve the next id to use for a new profile
+   \return the unique <id> to be used when creating a new profile
+   */
+  int GetNextProfileId() const { return m_nextIdProfile; }; // used to get the value of m_nextIdProfile for use in new profile creation
+
+  int GetCurrentProfileId() const;
+
   std::vector<RESOLUTION_INFO> m_ResInfo;
 
   // utility functions for user data folders
@@ -399,6 +414,7 @@ private:
   bool m_usingLoginScreen;
   unsigned int m_lastUsedProfile;
   unsigned int m_currentProfile;
+  int m_nextIdProfile; // for tracking the next available id to give to a new profile to ensure id's are not re-used
 };
 
 extern class CSettings g_settings;

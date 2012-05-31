@@ -25,18 +25,14 @@
 
 #include "../../guilib/Geometry.h"
 #include "../WinRenderer.h"
+#include "../RenderFormats.h"
 
-/*
-class CBaseVideoFilter
-{
-};
-*/
 
 class CYUV2RGBMatrix
 {
 public:
   CYUV2RGBMatrix();
-  void SetParameters(float contrast, float blacklevel, unsigned int flags);
+  void SetParameters(float contrast, float blacklevel, unsigned int flags, ERenderFormat format);
   D3DXMATRIX* Matrix();
 
 private:
@@ -44,6 +40,7 @@ private:
   float        m_contrast;
   float        m_blacklevel;
   unsigned int m_flags;
+  ERenderFormat m_format;
   D3DXMATRIX   m_mat;
 };
 
@@ -51,17 +48,12 @@ class CWinShader
 {
 protected:
   CWinShader() {}
-
-public:
-  void Release(); // for user code only, like the SAFE_RELEASE() construct
-
-protected:
+  virtual ~CWinShader();
   virtual bool CreateVertexBuffer(DWORD FVF, unsigned int vertCount, unsigned int vertSize, unsigned int primitivesCount);
   virtual bool LockVertexBuffer(void **data);
   virtual bool UnlockVertexBuffer();
-  virtual void ReleaseInternal();
   virtual bool LoadEffect(CStdString filename, DefinesMap* defines);
-  virtual bool Execute();
+  virtual bool Execute(std::vector<LPDIRECT3DSURFACE9> *vecRT, unsigned int vertexIndexStep);
 
   CD3DEffect   m_effect;
 
@@ -76,13 +68,14 @@ private:
 class CYUV2RGBShader : public CWinShader
 {
 public:
-  virtual bool Create(unsigned int sourceWidth, unsigned int sourceHeight, BufferFormat fmt);
+  virtual bool Create(unsigned int sourceWidth, unsigned int sourceHeight, ERenderFormat fmt);
   virtual void Render(CRect sourceRect,
                       CRect destRect,
                       float contrast,
                       float brightness,
                       unsigned int flags,
                       YUVBuffer* YUVbuf);
+  virtual ~CYUV2RGBShader();
 
 protected:
   virtual void PrepareParameters(CRect sourceRect,
@@ -91,13 +84,13 @@ protected:
                                  float brightness,
                                  unsigned int flags);
   virtual void SetShaderParameters(YUVBuffer* YUVbuf);
-  virtual void ReleaseInternal();
   virtual bool UploadToGPU(YUVBuffer* YUVbuf);
 
 private:
   CYUV2RGBMatrix m_matrix;
   unsigned int   m_sourceWidth, m_sourceHeight;
   CRect          m_sourceRect, m_destRect;
+  ERenderFormat  m_format;
   CD3DTexture    m_YUVPlanes[3];
   float          m_texSteps[2];
 
@@ -113,34 +106,80 @@ private:
 class CConvolutionShader : public CWinShader
 {
 public:
-  virtual bool Create(ESCALINGMETHOD method);
+  virtual bool Create(ESCALINGMETHOD method) = 0;
   virtual void Render(CD3DTexture &sourceTexture,
                                unsigned int sourceWidth, unsigned int sourceHeight,
+                               unsigned int destWidth, unsigned int destHeight,
                                CRect sourceRect,
-                               CRect destRect);
+                               CRect destRect) = 0;
+  virtual ~CConvolutionShader();
 
 protected:
-  virtual bool KernelTexFormat();
+  virtual bool ChooseKernelD3DFormat();
   virtual bool CreateHQKernel(ESCALINGMETHOD method);
-  virtual void PrepareParameters(unsigned int sourceWidth, unsigned int sourceHeight,
-                               CRect sourceRect,
-                               CRect destRect);
-  virtual void SetShaderParameters(CD3DTexture &sourceTexture, float* texSteps, int texStepsCount);
-  virtual void ReleaseInternal();
 
-private:
   CD3DTexture   m_HQKernelTexture;
-  D3DFORMAT     m_format;
+  D3DFORMAT     m_KernelFormat;
   bool          m_floattex;
   bool          m_rgba;
-  unsigned int  m_sourceWidth, m_sourceHeight;
-  CRect         m_sourceRect, m_destRect;
 
   struct CUSTOMVERTEX {
       FLOAT x, y, z;
       FLOAT rhw;
       FLOAT tu, tv;
   };
+};
+
+class CConvolutionShader1Pass : public CConvolutionShader
+{
+public:
+  virtual bool Create(ESCALINGMETHOD method);
+  virtual void Render(CD3DTexture &sourceTexture,
+                               unsigned int sourceWidth, unsigned int sourceHeight,
+                               unsigned int destWidth, unsigned int destHeight,
+                               CRect sourceRect,
+                               CRect destRect);
+
+protected:
+  virtual void PrepareParameters(unsigned int sourceWidth, unsigned int sourceHeight,
+                               CRect sourceRect,
+                               CRect destRect);
+  virtual void SetShaderParameters(CD3DTexture &sourceTexture, float* texSteps, int texStepsCount);
+
+
+private:
+  unsigned int  m_sourceWidth, m_sourceHeight;
+  CRect         m_sourceRect, m_destRect;
+};
+
+class CConvolutionShaderSeparable : public CConvolutionShader
+{
+public:
+  CConvolutionShaderSeparable();
+  virtual bool Create(ESCALINGMETHOD method);
+  virtual void Render(CD3DTexture &sourceTexture,
+                               unsigned int sourceWidth, unsigned int sourceHeight,
+                               unsigned int destWidth, unsigned int destHeight,
+                               CRect sourceRect,
+                               CRect destRect);
+  virtual ~CConvolutionShaderSeparable();
+
+protected:
+  virtual bool ChooseIntermediateD3DFormat();
+  virtual bool CreateIntermediateRenderTarget(unsigned int width, unsigned int height);
+  virtual bool ClearIntermediateRenderTarget();
+  virtual void PrepareParameters(unsigned int sourceWidth, unsigned int sourceHeight,
+                               unsigned int destWidth, unsigned int destHeight,
+                               CRect sourceRect,
+                               CRect destRect);
+  virtual void SetShaderParameters(CD3DTexture &sourceTexture, float* texSteps1, int texStepsCount1, float* texSteps2, int texStepsCount2);
+
+private:
+  CD3DTexture   m_IntermediateTarget;
+  D3DFORMAT     m_IntermediateFormat;
+  unsigned int  m_sourceWidth, m_sourceHeight;
+  unsigned int  m_destWidth, m_destHeight;
+  CRect         m_sourceRect, m_destRect;
 };
 
 class CTestShader : public CWinShader

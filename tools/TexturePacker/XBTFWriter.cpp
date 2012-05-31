@@ -24,7 +24,9 @@
 #include <inttypes.h>
 #include "guilib/XBTF.h"
 #include "utils/EndianSwap.h"
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#if defined(__FreeBSD__)
+#include <stdlib.h>
+#elif !defined(__APPLE__)
 #include <malloc.h>
 #endif
 #include <memory.h>
@@ -140,7 +142,7 @@ bool CXBTFWriter::UpdateHeader(const std::vector<unsigned int>& dupes)
 
       WRITE_U32(frame.GetWidth(), m_file);
       WRITE_U32(frame.GetHeight(), m_file);
-      WRITE_U32(frame.GetFormat(), m_file);
+      WRITE_U32(frame.GetFormat(true), m_file);
       WRITE_U64(frame.GetPackedSize(), m_file);
       WRITE_U64(frame.GetUnpackedSize(), m_file);
       WRITE_U32(frame.GetDuration(), m_file);

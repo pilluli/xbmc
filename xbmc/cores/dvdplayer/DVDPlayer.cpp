@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "system.h"
 #include "DVDPlayer.h"
 
@@ -38,6 +39,9 @@
 #include "DVDCodecs/DVDFactoryCodec.h"
 
 #include "DVDFileInfo.h"
+
+#include "utils/LangCodeExpander.h"
+#include "guilib/LocalizeStrings.h"
 
 #include "utils/URIUtils.h"
 #include "GUIInfoManager.h"
@@ -63,10 +67,14 @@
 #include "utils/log.h"
 #include "utils/TimeUtils.h"
 #include "utils/StreamDetails.h"
+#include "utils/StreamUtils.h"
+#include "utils/Variant.h"
 #include "storage/MediaManager.h"
 #include "dialogs/GUIDialogBusy.h"
+#include "dialogs/GUIDialogKaiToast.h"
 #include "utils/StringUtils.h"
 #include "Util.h"
+#include "LangInfo.h"
 
 using namespace std;
 
@@ -109,6 +117,88 @@ SelectionStream& CSelectionStreams::Get(StreamType type, int index)
   return m_invalid;
 }
 
+std::vector<SelectionStream> CSelectionStreams::Get(StreamType type)
+{
+  std::vector<SelectionStream> streams;
+  int count = Count(type);
+  for(int index = 0; index < count; ++index){
+    streams.push_back(Get(type, index));
+  }
+  return streams;
+}
+
+#define PREDICATE_RETURN(lh, rh) \
+  do { \
+    if((lh) != (rh)) \
+      return (lh) > (rh); \
+  } while(0)
+
+static bool PredicateAudioPriority(const SelectionStream& lh, const SelectionStream& rh)
+{
+  PREDICATE_RETURN(lh.type_index == g_settings.m_currentVideoSettings.m_AudioStream
+                 , rh.type_index == g_settings.m_currentVideoSettings.m_AudioStream);
+
+  if(!g_guiSettings.GetString("locale.audiolanguage").Equals("original"))
+  {
+    CStdString audio_language = g_langInfo.GetAudioLanguage();
+    PREDICATE_RETURN(audio_language.Equals(lh.language.c_str())
+                   , audio_language.Equals(rh.language.c_str()));
+  }
+
+  PREDICATE_RETURN(lh.flags & CDemuxStream::FLAG_DEFAULT
+                 , rh.flags & CDemuxStream::FLAG_DEFAULT);
+
+  PREDICATE_RETURN(lh.channels
+                 , rh.channels);
+
+  PREDICATE_RETURN(StreamUtils::GetCodecPriority(lh.codec)
+                 , StreamUtils::GetCodecPriority(rh.codec));
+  return false;
+}
+
+static bool PredicateSubtitlePriority(const SelectionStream& lh, const SelectionStream& rh)
+{
+  if(!g_settings.m_currentVideoSettings.m_SubtitleOn)
+  {
+    PREDICATE_RETURN(lh.flags & CDemuxStream::FLAG_FORCED
+                   , rh.flags & CDemuxStream::FLAG_FORCED);
+  }
+
+  PREDICATE_RETURN(lh.type_index == g_settings.m_currentVideoSettings.m_SubtitleStream
+                 , rh.type_index == g_settings.m_currentVideoSettings.m_SubtitleStream);
+
+  CStdString subtitle_language = g_langInfo.GetSubtitleLanguage();
+  if(!g_guiSettings.GetString("locale.subtitlelanguage").Equals("original"))
+  {
+    PREDICATE_RETURN((lh.source == STREAM_SOURCE_DEMUX_SUB || lh.source == STREAM_SOURCE_TEXT) && subtitle_language.Equals(lh.language.c_str())
+                   , (rh.source == STREAM_SOURCE_DEMUX_SUB || rh.source == STREAM_SOURCE_TEXT) && subtitle_language.Equals(rh.language.c_str()));
+  }
+
+  PREDICATE_RETURN(lh.source == STREAM_SOURCE_DEMUX_SUB
+                 , rh.source == STREAM_SOURCE_DEMUX_SUB);
+
+  PREDICATE_RETURN(lh.source == STREAM_SOURCE_TEXT
+                 , rh.source == STREAM_SOURCE_TEXT);
+
+  if(!g_guiSettings.GetString("locale.subtitlelanguage").Equals("original"))
+  {
+    PREDICATE_RETURN(subtitle_language.Equals(lh.language.c_str())
+                   , subtitle_language.Equals(rh.language.c_str()));
+  }
+
+  PREDICATE_RETURN(lh.flags & CDemuxStream::FLAG_DEFAULT
+                 , rh.flags & CDemuxStream::FLAG_DEFAULT);
+
+  return false;
+}
+
+static bool PredicateVideoPriority(const SelectionStream& lh, const SelectionStream& rh)
+{
+  PREDICATE_RETURN(lh.flags & CDemuxStream::FLAG_DEFAULT
+                 , rh.flags & CDemuxStream::FLAG_DEFAULT);
+  return false;
+}
+
 bool CSelectionStreams::Get(StreamType type, CDemuxStream::EFlags flag, SelectionStream& out)
 {
   CSingleLock lock(m_section);
@@ -124,7 +214,7 @@ bool CSelectionStreams::Get(StreamType type, CDemuxStream::EFlags flag, Selectio
   return false;
 }
 
-int CSelectionStreams::IndexOf(StreamType type, int source, int id)
+int CSelectionStreams::IndexOf(StreamType type, int source, int id) const
 {
   CSingleLock lock(m_section);
   int count = -1;
@@ -146,7 +236,7 @@ int CSelectionStreams::IndexOf(StreamType type, int source, int id)
     return -1;
 }
 
-int CSelectionStreams::IndexOf(StreamType type, CDVDPlayer& p)
+int CSelectionStreams::IndexOf(StreamType type, CDVDPlayer& p) const
 {
   if (p.m_pInputStream && p.m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
   {
@@ -197,9 +287,16 @@ void CSelectionStreams::Update(SelectionStream& s)
   CSingleLock lock(m_section);
   int index = IndexOf(s.type, s.source, s.id);
   if(index >= 0)
-    Get(s.type, index) = s;
+  {
+    SelectionStream& o = Get(s.type, index);
+    s.type_index = o.type_index;
+    o = s;
+  }
   else
+  {
+    s.type_index = Count(s.type);
     m_Streams.push_back(s);
+  }
 }
 
 void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
@@ -221,6 +318,7 @@ void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
       s.name     = nav->GetAudioStreamLanguage(i);
       s.flags    = CDemuxStream::FLAG_NONE;
       s.filename = filename;
+      s.channels = 0;
       Update(s);
     }
 
@@ -234,6 +332,7 @@ void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
       s.name     = nav->GetSubtitleStreamLanguage(i);
       s.flags    = CDemuxStream::FLAG_NONE;
       s.filename = filename;
+      s.channels = 0;
       Update(s);
     }
   }
@@ -262,6 +361,10 @@ void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
       s.flags    = stream->flags;
       s.filename = demuxer->GetFileName();
       stream->GetStreamName(s.name);
+      CStdString codec;
+      demuxer->GetStreamCodecName(stream->iId, codec);
+      s.codec    = codec;
+      s.channels = 0; // Default to 0. Overwrite if STREAM_AUDIO below.
       if(stream->type == STREAM_AUDIO)
       {
         std::string type;
@@ -272,6 +375,7 @@ void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
             s.name += " - ";
           s.name += type;
         }
+        s.channels = ((CDemuxStreamAudio*)stream)->iChannels;
       }
       Update(s);
     }
@@ -280,11 +384,11 @@ void CSelectionStreams::Update(CDVDInputStream* input, CDVDDemux* demuxer)
 
 CDVDPlayer::CDVDPlayer(IPlayerCallback& callback)
     : IPlayer(callback),
-      CThread(),
-      m_CurrentAudio(STREAM_AUDIO),
-      m_CurrentVideo(STREAM_VIDEO),
-      m_CurrentSubtitle(STREAM_SUBTITLE),
-      m_CurrentTeletext(STREAM_TELETEXT),
+      CThread("CDVDPlayer"),
+      m_CurrentAudio(STREAM_AUDIO, DVDPLAYER_AUDIO),
+      m_CurrentVideo(STREAM_VIDEO, DVDPLAYER_VIDEO),
+      m_CurrentSubtitle(STREAM_SUBTITLE, DVDPLAYER_SUBTITLE),
+      m_CurrentTeletext(STREAM_TELETEXT, DVDPLAYER_TELETEXT),
       m_messenger("player"),
       m_dvdPlayerVideo(&m_clock, &m_overlayContainer, m_messenger),
       m_dvdPlayerAudio(&m_clock, m_messenger),
@@ -295,8 +399,6 @@ CDVDPlayer::CDVDPlayer(IPlayerCallback& callback)
   m_pDemuxer = NULL;
   m_pSubtitleDemuxer = NULL;
   m_pInputStream = NULL;
-
-  InitializeCriticalSection(&m_critStreamSection);
 
   m_dvd.Clear();
   m_State.Clear();
@@ -316,7 +418,6 @@ CDVDPlayer::~CDVDPlayer()
 {
   CloseFile();
 
-  DeleteCriticalSection(&m_critStreamSection);
 #ifdef DVDDEBUG_MESSAGE_TRACKER
   g_dvdMessageTracker.DeInit();
 #endif
@@ -326,11 +427,11 @@ bool CDVDPlayer::OpenFile(const CFileItem& file, const CPlayerOptions &options)
 {
   try
   {
-    CLog::Log(LOGNOTICE, "DVDPlayer: Opening: %s", file.m_strPath.c_str());
+    CLog::Log(LOGNOTICE, "DVDPlayer: Opening: %s", file.GetPath().c_str());
 
     // if playing a file close it first
     // this has to be changed so we won't have to close it.
-    if(ThreadHandle())
+    if(IsRunning())
       CloseFile();
 
     m_bAbortRequest = false;
@@ -338,13 +439,19 @@ bool CDVDPlayer::OpenFile(const CFileItem& file, const CPlayerOptions &options)
 
     m_State.Clear();
     m_UpdateApplication = 0;
+    m_offset_pts = 0;
 
     m_PlayerOptions = options;
     m_item     = file;
     m_mimetype  = file.GetMimeType();
-    m_filename = file.m_strPath;
+    m_filename = file.GetPath();
 
     m_ready.Reset();
+	
+#if defined(HAS_VIDEO_PLAYBACK)
+    g_renderManager.PreInit();
+#endif
+	
     Create();
     if(!m_ready.WaitMSec(100))
     {
@@ -409,7 +516,6 @@ bool CDVDPlayer::IsPlaying() const
 
 void CDVDPlayer::OnStartup()
 {
-  CThread::SetName("CDVDPlayer");
   m_CurrentVideo.Clear();
   m_CurrentAudio.Clear();
   m_CurrentSubtitle.Clear();
@@ -417,7 +523,8 @@ void CDVDPlayer::OnStartup()
 
   m_messenger.Init();
 
-  g_dvdPerformanceCounter.EnableMainPerformance(ThreadHandle());
+  g_dvdPerformanceCounter.EnableMainPerformance(this);
+  CUtil::ClearTempFonts();
 }
 
 bool CDVDPlayer::OpenInputStream()
@@ -430,7 +537,6 @@ bool CDVDPlayer::OpenInputStream()
   // correct the filename if needed
   CStdString filename(m_filename);
   if (filename.Find("dvd://") == 0
-  ||  filename.CompareNoCase("d:\\video_ts\\video_ts.ifo") == 0
   ||  filename.CompareNoCase("iso9660://video_ts/video_ts.ifo") == 0)
   {
     m_filename = g_mediaManager.TranslateDevicePath("");
@@ -453,7 +559,7 @@ retry:
         m_mimetype = "bluray/iso";
         filename = m_filename;
         filename = filename + "/BDMV/index.bdmv";
-        int title = m_item.GetPropertyInt("BlurayStartingTitle");
+        int title = (int)m_item.GetProperty("BlurayStartingTitle").asInteger();
         if( title )
           filename.AppendFormat("?title=%d",title);
         
@@ -476,7 +582,7 @@ retry:
     // find any upnp subtitles
     CStdString key("upnp:subtitle:1");
     for(unsigned s = 1; m_item.HasProperty(key); key.Format("upnp:subtitle:%u", ++s))
-      filenames.push_back(m_item.GetProperty(key));
+      filenames.push_back(m_item.GetProperty(key).asString());
 
     for(unsigned int i=0;i<filenames.size();i++)
     {
@@ -521,7 +627,7 @@ bool CDVDPlayer::OpenDemuxStream()
     while(!m_bStop && attempts-- > 0)
     {
       m_pDemuxer = CDVDFactoryDemuxer::CreateDemuxer(m_pInputStream);
-      if(!m_pDemuxer && m_pInputStream->NextStream())
+      if(!m_pDemuxer && m_pInputStream->NextStream() != CDVDInputStream::NEXTSTREAM_NONE)
       {
         CLog::Log(LOGDEBUG, "%s - New stream available from input, retry open", __FUNCTION__);
         continue;
@@ -556,128 +662,59 @@ bool CDVDPlayer::OpenDemuxStream()
 
 void CDVDPlayer::OpenDefaultStreams()
 {
-  int  count;
+  SelectionStreams streams;
   bool valid;
-  bool force = false;
-  SelectionStream st;
 
   // open video stream
-  count = m_SelectionStreams.Count(STREAM_VIDEO);
-  valid = false;
-
-  if(!valid
-  && m_SelectionStreams.Get(STREAM_VIDEO, CDemuxStream::FLAG_DEFAULT, st))
+  streams = m_SelectionStreams.Get(STREAM_VIDEO, PredicateVideoPriority);
+  valid   = false;
+  for(SelectionStreams::iterator it = streams.begin(); it != streams.end() && !valid; ++it)
   {
-    if(OpenVideoStream(st.id, st.source))
-      valid = true;
-    else
-      CLog::Log(LOGWARNING, "%s - failed to open default stream (%d)", __FUNCTION__, st.id);
-  }
-
-  for(int i = 0;i<count && !valid;i++)
-  {
-    SelectionStream& s = m_SelectionStreams.Get(STREAM_VIDEO, i);
-    if(OpenVideoStream(s.id, s.source))
-      valid = true;
+    if(OpenVideoStream(it->id, it->source))
+      valid = true;;
   }
   if(!valid)
     CloseVideoStream(true);
 
-  if(!m_PlayerOptions.video_only)
+  // open audio stream
+  if(m_PlayerOptions.video_only)
+    streams.clear();
+  else
+    streams = m_SelectionStreams.Get(STREAM_AUDIO, PredicateAudioPriority);
+  valid   = false;
+
+  for(SelectionStreams::iterator it = streams.begin(); it != streams.end() && !valid; ++it)
   {
-    // open audio stream
-    count = m_SelectionStreams.Count(STREAM_AUDIO);
-    valid = false;
-    if(g_settings.m_currentVideoSettings.m_AudioStream >= 0
-    && g_settings.m_currentVideoSettings.m_AudioStream < count)
-    {
-      SelectionStream& s = m_SelectionStreams.Get(STREAM_AUDIO, g_settings.m_currentVideoSettings.m_AudioStream);
-      if(OpenAudioStream(s.id, s.source))
-        valid = true;
-      else
-        CLog::Log(LOGWARNING, "%s - failed to restore selected audio stream (%d)", __FUNCTION__, g_settings.m_currentVideoSettings.m_AudioStream);
-    }
-
-    if(!valid
-    && m_SelectionStreams.Get(STREAM_AUDIO, CDemuxStream::FLAG_DEFAULT, st))
-    {
-      if(OpenAudioStream(st.id, st.source))
-        valid = true;
-      else
-        CLog::Log(LOGWARNING, "%s - failed to open default stream (%d)", __FUNCTION__, st.id);
-    }
-
-    for(int i = 0; i<count && !valid; i++)
-    {
-      SelectionStream& s = m_SelectionStreams.Get(STREAM_AUDIO, i);
-      if(OpenAudioStream(s.id, s.source))
-        valid = true;
-    }
-    if(!valid)
-      CloseAudioStream(true);
-  }
-
-  // open subtitle stream
-  count = m_SelectionStreams.Count(STREAM_SUBTITLE);
-  valid = false;
-
-  // if subs are disabled, check for forced
-  if(!valid && !g_settings.m_currentVideoSettings.m_SubtitleOn 
-  && m_SelectionStreams.Get(STREAM_SUBTITLE, CDemuxStream::FLAG_FORCED, st))
-  {
-    if(OpenSubtitleStream(st.id, st.source))
-    {
-      valid = true;
-      force = true;
-    }
-    else
-      CLog::Log(LOGWARNING, "%s - failed to open default/forced stream (%d)", __FUNCTION__, st.id);
-  }
-
-  // restore selected
-  if(!valid
-  && g_settings.m_currentVideoSettings.m_SubtitleStream >= 0
-  && g_settings.m_currentVideoSettings.m_SubtitleStream < count)
-  {
-    SelectionStream& s = m_SelectionStreams.Get(STREAM_SUBTITLE, g_settings.m_currentVideoSettings.m_SubtitleStream);
-    if(OpenSubtitleStream(s.id, s.source))
-      valid = true;
-    else
-      CLog::Log(LOGWARNING, "%s - failed to restore selected subtitle stream (%d)", __FUNCTION__, g_settings.m_currentVideoSettings.m_SubtitleStream);
-  }
-
-  // select default
-  if(!valid
-  && m_SelectionStreams.Get(STREAM_SUBTITLE, CDemuxStream::FLAG_DEFAULT, st))
-  {
-    if(OpenSubtitleStream(st.id, st.source))
-      valid = true;
-    else
-      CLog::Log(LOGWARNING, "%s - failed to open default/forced stream (%d)", __FUNCTION__, st.id);
-  }
-
-  // select first
-  for(int i = 0;i<count && !valid; i++)
-  {
-    SelectionStream& s = m_SelectionStreams.Get(STREAM_SUBTITLE, i);
-    if(OpenSubtitleStream(s.id, s.source))
+    if(OpenAudioStream(it->id, it->source))
       valid = true;
   }
   if(!valid)
-    CloseSubtitleStream(false);
+    CloseAudioStream(true);
 
-  if((g_settings.m_currentVideoSettings.m_SubtitleOn || force) && !m_PlayerOptions.video_only)
-    m_dvdPlayerVideo.EnableSubtitle(true);
-  else
-    m_dvdPlayerVideo.EnableSubtitle(false);
+  // enable subtitles
+  m_dvdPlayerVideo.EnableSubtitle(g_settings.m_currentVideoSettings.m_SubtitleOn);
 
-  // open teletext data stream
-  count = m_SelectionStreams.Count(STREAM_TELETEXT);
-  valid = false;
-  for(int i = 0;i<count && !valid;i++)
+  // open subtitle stream
+  streams = m_SelectionStreams.Get(STREAM_SUBTITLE, PredicateSubtitlePriority);
+  valid   = false;
+  for(SelectionStreams::iterator it = streams.begin(); it != streams.end() && !valid; ++it)
   {
-    SelectionStream& s = m_SelectionStreams.Get(STREAM_TELETEXT, i);
-    if(OpenTeletextStream(s.id, s.source))
+    if(OpenSubtitleStream(it->id, it->source))
+    {
+      valid = true;
+      if(it->flags & CDemuxStream::FLAG_FORCED)
+        m_dvdPlayerVideo.EnableSubtitle(true);
+    }
+  }
+  if(!valid)
+    CloseSubtitleStream(true);
+
+  // open teletext stream
+  streams = m_SelectionStreams.Get(STREAM_TELETEXT);
+  valid   = false;
+  for(SelectionStreams::iterator it = streams.begin(); it != streams.end() && !valid; ++it)
+  {
+    if(OpenTeletextStream(it->id, it->source))
       valid = true;
   }
   if(!valid)
@@ -695,6 +732,7 @@ bool CDVDPlayer::ReadPacket(DemuxPacket*& packet, CDemuxStream*& stream)
 
     if(packet)
     {
+      UpdateCorrection(packet, m_offset_pts);
       if(packet->iStreamId < 0)
         return true;
 
@@ -719,6 +757,7 @@ bool CDVDPlayer::ReadPacket(DemuxPacket*& packet, CDemuxStream*& stream)
 
   if(packet)
   {
+    UpdateCorrection(packet, m_offset_pts);
     // this groupId stuff is getting a bit messy, need to find a better way
     // currently it is used to determine if a menu overlay is associated with a picture
     // for dvd's we use as a group id, the current cell and the current title
@@ -789,7 +828,8 @@ bool CDVDPlayer::IsBetterStream(CCurrentStream& current, CDemuxStream* stream)
   if(m_PlayerOptions.video_only && current.type != STREAM_VIDEO)
     return false;
 
-  if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+  if (m_pInputStream && ( m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD)
+                       || m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY) ) )
   {
     int source_type;
 
@@ -885,10 +925,18 @@ void CDVDPlayer::Process()
    */
   CEdl::Cut cut;
   int starttime = 0;
-  if(m_PlayerOptions.starttime > 0)
+  if(m_PlayerOptions.starttime > 0 || m_PlayerOptions.startpercent > 0)
   {
-    starttime = m_Edl.RestoreCutTime((__int64)m_PlayerOptions.starttime * 1000); // s to ms
-    CLog::Log(LOGDEBUG, "%s - Start position set to last stopped position: %d", __FUNCTION__, starttime);
+    if (m_PlayerOptions.startpercent > 0 && m_pDemuxer)
+    {
+      int64_t playerStartTime = (int64_t) ( ( (float) m_pDemuxer->GetStreamLength() ) * ( m_PlayerOptions.startpercent/(float)100 ) );
+      starttime = m_Edl.RestoreCutTime(playerStartTime);
+    }
+    else
+    {  
+      starttime = m_Edl.RestoreCutTime((int64_t)m_PlayerOptions.starttime * 1000); // s to ms
+    }
+    CLog::Log(LOGDEBUG, "%s - Start position set to last stopped position: %d", __FUNCTION__, starttime);          
   }
   else if(m_Edl.InCut(0, &cut)
       && (cut.action == CEdl::CUT || cut.action == CEdl::COMM_BREAK))
@@ -959,7 +1007,7 @@ void CDVDPlayer::Process()
     // should we open a new demuxer?
     if(!m_pDemuxer)
     {
-      if (m_pInputStream->NextStream() == false)
+      if (m_pInputStream->NextStream() == CDVDInputStream::NEXTSTREAM_NONE)
         break;
 
       if (m_pInputStream->IsEOF())
@@ -994,8 +1042,8 @@ void CDVDPlayer::Process()
     }
 
     // always yield to players if they have data
-    if((m_dvdPlayerAudio.m_messageQueue.GetDataSize() > 0 || m_CurrentAudio.id < 0)
-    && (m_dvdPlayerVideo.m_messageQueue.GetDataSize() > 0 || m_CurrentVideo.id < 0))
+    if((m_dvdPlayerAudio.HasData() || m_CurrentAudio.id < 0)
+    && (m_dvdPlayerVideo.HasData() || m_CurrentVideo.id < 0))
       Sleep(0);
 
     DemuxPacket* pPacket = NULL;
@@ -1014,31 +1062,17 @@ void CDVDPlayer::Process()
       if (m_playSpeed == DVD_PLAYSPEED_PAUSE)
         continue;
 
-      // if there is another stream available, let
-      // player reopen demuxer
-      if(m_pInputStream->NextStream())
-      {
-        SAFE_DELETE(m_pDemuxer);
-        continue;
-      }
-
+      // check for a still frame state
       if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
       {
         CDVDInputStreamNavigator* pStream = static_cast<CDVDInputStreamNavigator*>(m_pInputStream);
-
-        // stream is holding back data until demuxer has flushed
-        if(pStream->IsHeld())
-        {
-          pStream->SkipHold();
-          continue;
-        }
 
         // stills will be skipped
         if(m_dvd.state == DVDSTATE_STILL)
         {
           if (m_dvd.iDVDStillTime > 0)
           {
-            if (CTimeUtils::GetTimeMS() >= (m_dvd.iDVDStillStartTime + m_dvd.iDVDStillTime))
+            if ((XbmcThreads::SystemClockMillis() - m_dvd.iDVDStillStartTime) >= m_dvd.iDVDStillTime)
             {
               m_dvd.iDVDStillTime = 0;
               m_dvd.iDVDStillStartTime = 0;
@@ -1048,13 +1082,19 @@ void CDVDPlayer::Process()
             }
           }
         }
+      }
 
-        // if playing a main title DVD/ISO rip, there is no menu structure so
-        // dvdnav will tell us it's done by setting EOF on the stream.
-        if (pStream->IsEOF())
-          break;
+      // if there is another stream available, reopen demuxer
+      CDVDInputStream::ENextStream next = m_pInputStream->NextStream();
+      if(next == CDVDInputStream::NEXTSTREAM_OPEN)
+      {
+        SAFE_DELETE(m_pDemuxer);
+        continue;
+      }
 
-        // always continue on dvd's
+      // input stream asked us to just retry
+      if(next == CDVDInputStream::NEXTSTREAM_RETRY)
+      {
         Sleep(100);
         continue;
       }
@@ -1081,8 +1121,8 @@ void CDVDPlayer::Process()
       SetCaching(CACHESTATE_DONE);
 
       // while players are still playing, keep going to allow seekbacks
-      if(m_dvdPlayerAudio.m_messageQueue.GetDataSize() > 0
-      || m_dvdPlayerVideo.m_messageQueue.GetDataSize() > 0)
+      if(m_dvdPlayerAudio.HasData()
+      || m_dvdPlayerVideo.HasData())
       {
         Sleep(100);
         continue;
@@ -1120,7 +1160,7 @@ void CDVDPlayer::Process()
 void CDVDPlayer::ProcessPacket(CDemuxStream* pStream, DemuxPacket* pPacket)
 {
     /* process packet if it belongs to selected stream. for dvd's don't allow automatic opening of streams*/
-    LockStreams();
+    StreamLock lock(this);
 
     try
     {
@@ -1143,7 +1183,6 @@ void CDVDPlayer::ProcessPacket(CDemuxStream* pStream, DemuxPacket* pPacket)
       CLog::Log(LOGERROR, "%s - Exception thrown when processing demux packet", __FUNCTION__);
     }
 
-    UnlockStreams();
 }
 
 void CDVDPlayer::ProcessAudioData(CDemuxStream* pStream, DemuxPacket* pPacket)
@@ -1163,10 +1202,7 @@ void CDVDPlayer::ProcessAudioData(CDemuxStream* pStream, DemuxPacket* pPacket)
   CheckStartCaching(m_CurrentAudio);
 
   CheckContinuity(m_CurrentAudio, pPacket);
-  if(pPacket->dts != DVD_NOPTS_VALUE)
-    m_CurrentAudio.dts = pPacket->dts;
-  else if(pPacket->pts != DVD_NOPTS_VALUE)
-    m_CurrentAudio.dts = pPacket->pts;
+  UpdateTimestamps(m_CurrentAudio, pPacket);
 
   bool drop = false;
   if (CheckPlayerInit(m_CurrentAudio, DVDPLAYER_AUDIO))
@@ -1181,13 +1217,13 @@ void CDVDPlayer::ProcessAudioData(CDemuxStream* pStream, DemuxPacket* pPacket)
   CEdl::Cut cut;
   if (CheckSceneSkip(m_CurrentAudio))
     drop = true;
-  else if (m_Edl.InCut(DVD_TIME_TO_MSEC(m_CurrentAudio.dts), &cut) && cut.action == CEdl::MUTE // Inside EDL mute
+  else if (m_Edl.InCut(DVD_TIME_TO_MSEC(m_CurrentAudio.dts + m_offset_pts), &cut) && cut.action == CEdl::MUTE // Inside EDL mute
   &&      !m_EdlAutoSkipMarkers.mute) // Mute not already triggered
   {
     m_dvdPlayerAudio.SendMessage(new CDVDMsgBool(CDVDMsg::AUDIO_SILENCE, true));
     m_EdlAutoSkipMarkers.mute = true;
   }
-  else if (!m_Edl.InCut(DVD_TIME_TO_MSEC(m_CurrentAudio.dts), &cut) // Outside of any EDL
+  else if (!m_Edl.InCut(DVD_TIME_TO_MSEC(m_CurrentAudio.dts + m_offset_pts), &cut) // Outside of any EDL
   &&        m_EdlAutoSkipMarkers.mute) // But the mute hasn't been removed yet
   {
     m_dvdPlayerAudio.SendMessage(new CDVDMsgBool(CDVDMsg::AUDIO_SILENCE, false));
@@ -1216,10 +1252,7 @@ void CDVDPlayer::ProcessVideoData(CDemuxStream* pStream, DemuxPacket* pPacket)
   if( pPacket->iSize != 4) //don't check the EOF_SEQUENCE of stillframes
   {
     CheckContinuity(m_CurrentVideo, pPacket);
-    if(pPacket->dts != DVD_NOPTS_VALUE)
-      m_CurrentVideo.dts = pPacket->dts;
-    else if(pPacket->pts != DVD_NOPTS_VALUE)
-      m_CurrentVideo.dts = pPacket->pts;
+    UpdateTimestamps(m_CurrentVideo, pPacket);
   }
 
   bool drop = false;
@@ -1244,10 +1277,8 @@ void CDVDPlayer::ProcessSubData(CDemuxStream* pStream, DemuxPacket* pPacket)
 
     m_CurrentSubtitle.stream = (void*)pStream;
   }
-  if(pPacket->dts != DVD_NOPTS_VALUE)
-    m_CurrentSubtitle.dts = pPacket->dts;
-  else if(pPacket->pts != DVD_NOPTS_VALUE)
-    m_CurrentSubtitle.dts = pPacket->pts;
+
+  UpdateTimestamps(m_CurrentSubtitle, pPacket);
 
   bool drop = false;
   if (CheckPlayerInit(m_CurrentSubtitle, DVDPLAYER_SUBTITLE))
@@ -1273,10 +1304,7 @@ void CDVDPlayer::ProcessTeletextData(CDemuxStream* pStream, DemuxPacket* pPacket
 
     m_CurrentTeletext.stream = (void*)pStream;
   }
-  if(pPacket->dts != DVD_NOPTS_VALUE)
-    m_CurrentTeletext.dts = pPacket->dts;
-  else if(pPacket->pts != DVD_NOPTS_VALUE)
-    m_CurrentTeletext.dts = pPacket->pts;
+  UpdateTimestamps(m_CurrentTeletext, pPacket);
 
   bool drop = false;
   if (CheckPlayerInit(m_CurrentTeletext, DVDPLAYER_TELETEXT))
@@ -1293,10 +1321,18 @@ bool CDVDPlayer::GetCachingTimes(double& level, double& delay, double& offset)
   if(!m_pInputStream || !m_pDemuxer)
     return false;
 
-  int64_t cached  = m_pInputStream->GetCachedBytes();
+  XFILE::SCacheStatus status;
+  if (!m_pInputStream->GetCacheStatus(&status))
+    return false;
+
+  int64_t cached   = status.forward;
+  unsigned currate = status.currate;
+  unsigned maxrate = status.maxrate;
+  bool full        = status.full;
+
   int64_t length  = m_pInputStream->GetLength();
   int64_t remain  = length - m_pInputStream->Seek(0, SEEK_CUR);
-  unsigned rate   = m_pInputStream->GetReadRate();
+
   if(cached < 0 || length <= 0 || remain < 0)
     return false;
 
@@ -1307,22 +1343,21 @@ bool CDVDPlayer::GetCachingTimes(double& level, double& delay, double& offset)
   level  = 0.0;
   offset = (double)(cached + queued) / length;
 
-  if(rate == 0)
+  if (currate == 0)
     return true;
 
-  if(rate == (unsigned)-1) /* buffer is full */
-  {
-    level = -1.0;
-    return true;
-  }
-
-  double cache_sbp   = 1.1 * (double)DVD_TIME_BASE / rate;            /* underestimate by 10 % */
+  double cache_sbp   = 1.1 * (double)DVD_TIME_BASE / currate;         /* underestimate by 10 % */
   double play_left   = play_sbp  * (remain + queued);                 /* time to play out all remaining bytes */
   double cache_left  = cache_sbp * (remain - cached);                 /* time to cache the remaining bytes */
   double cache_need  = std::max(0.0, remain - play_left / cache_sbp); /* bytes needed until play_left == cache_left */
 
-  delay  = cache_left - play_left;
-  level  = (cached + queued) / (cache_need + queued);
+  delay = cache_left - play_left;
+
+  if (full && (currate < maxrate) )
+    level = -1.0;                          /* buffer is full & our read rate is too low  */
+  else
+    level = (cached + queued) / (cache_need + queued);
+
   return true;
 }
 
@@ -1340,7 +1375,7 @@ void CDVDPlayer::HandlePlaySpeed()
     {
       if(level  < 0.0)
       {
-        g_application.m_guiDialogKaiToast.QueueNotification("Cache full", "Cache filled before reaching required amount for continous playback");
+        CGUIDialogKaiToast::QueueNotification(g_localizeStrings.Get(21454), g_localizeStrings.Get(21455));
         caching = CACHESTATE_INIT;
       }
       if(level >= 1.0)
@@ -1418,7 +1453,7 @@ void CDVDPlayer::HandlePlaySpeed()
       if(error > DVD_MSEC_TO_TIME(1000))
       {
         CLog::Log(LOGDEBUG, "CDVDPlayer::Process - Seeking to catch up");
-        __int64 iTime = (__int64)DVD_TIME_TO_MSEC(m_clock.GetClock() + m_State.time_offset + 500000.0 * m_playSpeed / DVD_PLAYSPEED_NORMAL);
+        int64_t iTime = (int64_t)DVD_TIME_TO_MSEC(m_clock.GetClock() + m_State.time_offset + 500000.0 * m_playSpeed / DVD_PLAYSPEED_NORMAL);
         m_messenger.Put(new CDVDMsgPlayerSeek(iTime, (GetPlaySpeed() < 0), true, false, false, true));
       }
     }
@@ -1438,8 +1473,8 @@ bool CDVDPlayer::CheckStartCaching(CCurrentStream& current)
   || (current.type == STREAM_VIDEO && m_dvdPlayerVideo.IsStalled()))
   {
     // don't start caching if it's only a single stream that has run dry
-    if(m_dvdPlayerAudio.m_messageQueue.GetLevel() > 50
-    || m_dvdPlayerVideo.m_messageQueue.GetLevel() > 50)
+    if(m_dvdPlayerAudio.GetLevel() > 50
+    || m_dvdPlayerVideo.GetLevel() > 50)
       return false;
 
     if(m_pInputStream->IsStreamType(DVDSTREAM_TYPE_HTSP)
@@ -1537,12 +1572,44 @@ bool CDVDPlayer::CheckPlayerInit(CCurrentStream& current, unsigned int source)
   return false;
 }
 
+void CDVDPlayer::UpdateCorrection(DemuxPacket* pkt, double correction)
+{
+  if(pkt->dts != DVD_NOPTS_VALUE) pkt->dts -= correction;
+  if(pkt->pts != DVD_NOPTS_VALUE) pkt->pts -= correction;
+}
+
+void CDVDPlayer::UpdateTimestamps(CCurrentStream& current, DemuxPacket* pPacket)
+{
+  double dts = current.dts;
+  /* update stored values */
+  if(pPacket->dts != DVD_NOPTS_VALUE)
+    dts = pPacket->dts;
+  else if(pPacket->pts != DVD_NOPTS_VALUE)
+    dts = pPacket->pts;
+
+  /* calculate some average duration */
+  if(pPacket->duration != DVD_NOPTS_VALUE)
+    current.dur = pPacket->duration;
+  else if(dts != DVD_NOPTS_VALUE && current.dts != DVD_NOPTS_VALUE)
+    current.dur = 0.1 * (current.dur * 9 + (dts - current.dts));
+
+  current.dts = dts;
+}
+
+static void UpdateLimits(double& minimum, double& maximum, double dts)
+{
+  if(dts == DVD_NOPTS_VALUE)
+    return;
+  if(minimum == DVD_NOPTS_VALUE || minimum > dts) minimum = dts;
+  if(maximum == DVD_NOPTS_VALUE || maximum < dts) maximum = dts;
+}
+
 void CDVDPlayer::CheckContinuity(CCurrentStream& current, DemuxPacket* pPacket)
 {
   if (m_playSpeed < DVD_PLAYSPEED_PAUSE)
     return;
 
-  if( pPacket->dts == DVD_NOPTS_VALUE )
+  if( pPacket->dts == DVD_NOPTS_VALUE || current.dts == DVD_NOPTS_VALUE)
     return;
 
 #if 0
@@ -1582,61 +1649,46 @@ void CDVDPlayer::CheckContinuity(CCurrentStream& current, DemuxPacket* pPacket)
   }
 #endif
 
-  double mindts, maxdts;
-  if(m_CurrentAudio.dts == DVD_NOPTS_VALUE)
-    maxdts = mindts = m_CurrentVideo.dts;
-  else if(m_CurrentVideo.dts == DVD_NOPTS_VALUE)
-    maxdts = mindts = m_CurrentAudio.dts;
-  else
-  {
-    maxdts = max(m_CurrentAudio.dts, m_CurrentVideo.dts);
-    mindts = min(m_CurrentAudio.dts, m_CurrentVideo.dts);
-  }
+  double mindts = DVD_NOPTS_VALUE, maxdts = DVD_NOPTS_VALUE;
+  UpdateLimits(mindts, maxdts, m_CurrentAudio.dts);
+  UpdateLimits(mindts, maxdts, m_CurrentVideo.dts);
+  UpdateLimits(mindts, maxdts, m_CurrentAudio.dts_end());
+  UpdateLimits(mindts, maxdts, m_CurrentVideo.dts_end());
 
   /* if we don't have max and min, we can't do anything more */
   if( mindts == DVD_NOPTS_VALUE || maxdts == DVD_NOPTS_VALUE )
     return;
 
-  if( pPacket->dts < mindts - DVD_MSEC_TO_TIME(100) && current.inited)
+  double correction = 0.0;
+  if( pPacket->dts > maxdts + DVD_MSEC_TO_TIME(1000))
   {
-    /* if video player is rendering a stillframe, we need to make sure */
-    /* audio has finished processing it's data otherwise it will be */
-    /* displayed too early */
+    CLog::Log(LOGDEBUG, "CDVDPlayer::CheckContinuity - resync forward :%d, prev:%f, curr:%f, diff:%f"
+                            , current.type, current.dts, pPacket->dts, pPacket->dts - maxdts);
+    correction = pPacket->dts - maxdts;
+  }
 
-    CLog::Log(LOGWARNING, "CDVDPlayer::CheckContinuity - resync backword :%d, prev:%f, curr:%f, diff:%f"
+  /* if it's large scale jump, correct for it */
+  if(pPacket->dts + DVD_MSEC_TO_TIME(100) < current.dts_end())
+  {
+    CLog::Log(LOGDEBUG, "CDVDPlayer::CheckContinuity - resync backward :%d, prev:%f, curr:%f, diff:%f"
                             , current.type, current.dts, pPacket->dts, pPacket->dts - current.dts);
-    if (m_dvdPlayerVideo.IsStalled() && m_CurrentVideo.dts != DVD_NOPTS_VALUE)
-      SynchronizePlayers(SYNCSOURCE_VIDEO);
-    else if (m_dvdPlayerAudio.IsStalled() && m_CurrentAudio.dts != DVD_NOPTS_VALUE)
-      SynchronizePlayers(SYNCSOURCE_AUDIO);
-
-    m_CurrentAudio.inited = false;
-    m_CurrentVideo.inited = false;
-    m_CurrentSubtitle.inited = false;
-    m_CurrentTeletext.inited = false;
+    correction = pPacket->dts - current.dts_end();
   }
-
-  /* stream jump forward */
-  if( pPacket->dts > maxdts + DVD_MSEC_TO_TIME(1000) && current.inited)
+  else if(pPacket->dts < current.dts)
   {
-    CLog::Log(LOGWARNING, "CDVDPlayer::CheckContinuity - resync forward :%d, prev:%f, curr:%f, diff:%f"
+    CLog::Log(LOGDEBUG, "CDVDPlayer::CheckContinuity - wrapback :%d, prev:%f, curr:%f, diff:%f"
                             , current.type, current.dts, pPacket->dts, pPacket->dts - current.dts);
-    /* normally don't need to sync players since video player will keep playing at normal fps */
-    /* after a discontinuity */
-    //SynchronizePlayers(dts, pts, MSGWAIT_ALL);
-    m_CurrentAudio.inited = false;
-    m_CurrentVideo.inited = false;
-    m_CurrentSubtitle.inited = false;
-    m_CurrentTeletext.inited = false;
   }
 
-  if(current.dts != DVD_NOPTS_VALUE && pPacket->dts < current.dts && current.inited)
+  if(correction != 0.0)
   {
-    /* warn if dts is moving backwords */
-    CLog::Log(LOGWARNING, "CDVDPlayer::CheckContinuity - wrapback of stream:%d, prev:%f, curr:%f, diff:%f"
-                        , current.type, current.dts, pPacket->dts, pPacket->dts - current.dts);
-  }
+    /* disable detection on next packet on other stream to avoid ping pong-ing */
+    if(m_CurrentAudio.player != current.player) m_CurrentAudio.dts = DVD_NOPTS_VALUE;
+    if(m_CurrentVideo.player != current.player) m_CurrentVideo.dts = DVD_NOPTS_VALUE;
 
+    m_offset_pts += correction;
+    UpdateCorrection(pPacket, correction);
+  }
 }
 
 bool CDVDPlayer::CheckSceneSkip(CCurrentStream& current)
@@ -1651,7 +1703,7 @@ bool CDVDPlayer::CheckSceneSkip(CCurrentStream& current)
     return false;
 
   CEdl::Cut cut;
-  return m_Edl.InCut(DVD_TIME_TO_MSEC(current.dts), &cut) && cut.action == CEdl::CUT;
+  return m_Edl.InCut(DVD_TIME_TO_MSEC(current.dts + m_offset_pts), &cut) && cut.action == CEdl::CUT;
 }
 
 void CDVDPlayer::CheckAutoSceneSkip()
@@ -1678,7 +1730,7 @@ void CDVDPlayer::CheckAutoSceneSkip()
   || m_CurrentVideo.dts == DVD_NOPTS_VALUE)
     return;
 
-  const int64_t clock = DVD_TIME_TO_MSEC(min(m_CurrentAudio.dts, m_CurrentVideo.dts));
+  const int64_t clock = DVD_TIME_TO_MSEC(min(m_CurrentAudio.dts, m_CurrentVideo.dts) + m_offset_pts);
 
   CEdl::Cut cut;
   if(!m_Edl.InCut(clock, &cut))
@@ -1693,7 +1745,7 @@ void CDVDPlayer::CheckAutoSceneSkip()
     /*
      * Seeking either goes to the start or the end of the cut depending on the play direction.
      */
-    __int64 seek = GetPlaySpeed() >= 0 ? cut.end : cut.start;
+    int64_t seek = GetPlaySpeed() >= 0 ? cut.end : cut.start;
     /*
      * Seeking is NOT flushed so any content up to the demux point is retained when playing forwards.
      */
@@ -1874,7 +1926,7 @@ void CDVDPlayer::OnExit()
 void CDVDPlayer::HandleMessages()
 {
   CDVDMsg* pMsg;
-  LockStreams();
+  StreamLock lock(this);
 
   while (m_messenger.Get(&pMsg, 0) == MSGQ_OK)
   {
@@ -2051,13 +2103,8 @@ void CDVDPlayer::HandleMessages()
           m_State.timestamp =  CDVDClock::GetAbsoluteClock();
         }
 
-        if (speed != DVD_PLAYSPEED_PAUSE)
-        {
-          if (m_playSpeed != DVD_PLAYSPEED_PAUSE)
-          {
-            m_callback.OnPlayBackSpeedChanged(speed / DVD_PLAYSPEED_NORMAL );
-          }
-        }
+        if (speed != DVD_PLAYSPEED_PAUSE && m_playSpeed != DVD_PLAYSPEED_PAUSE && speed != m_playSpeed)
+          m_callback.OnPlayBackSpeedChanged(speed / DVD_PLAYSPEED_NORMAL);
 
         // if playspeed is different then DVD_PLAYSPEED_NORMAL or DVD_PLAYSPEED_PAUSE
         // audioplayer, stops outputing audio to audiorendere, but still tries to
@@ -2121,7 +2168,6 @@ void CDVDPlayer::HandleMessages()
 
     pMsg->Release();
   }
-  UnlockStreams();
 
 }
 
@@ -2196,16 +2242,14 @@ bool CDVDPlayer::IsPaused() const
 
 bool CDVDPlayer::HasVideo() const
 {
-  if (m_pInputStream)
-  {
-    if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD) || m_CurrentVideo.id >= 0) return true;
-  }
-  return false;
+  if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD)) return true;
+
+  return m_SelectionStreams.Count(STREAM_VIDEO) > 0 ? true : false;
 }
 
 bool CDVDPlayer::HasAudio() const
 {
-  return (m_CurrentAudio.id >= 0);
+  return m_SelectionStreams.Count(STREAM_AUDIO) > 0 ? true : false;
 }
 
 bool CDVDPlayer::IsPassthrough() const
@@ -2240,7 +2284,7 @@ void CDVDPlayer::Seek(bool bPlus, bool bLargeStep)
     return;
   }
 
-  __int64 seek;
+  int64_t seek;
   if (g_advancedSettings.m_videoUseTimeSeeking && GetTotalTime() > 2*g_advancedSettings.m_videoTimeSeekForwardBig)
   {
     if (bLargeStep)
@@ -2257,7 +2301,7 @@ void CDVDPlayer::Seek(bool bPlus, bool bLargeStep)
       percent = bPlus ? g_advancedSettings.m_videoPercentSeekForwardBig : g_advancedSettings.m_videoPercentSeekBackwardBig;
     else
       percent = bPlus ? g_advancedSettings.m_videoPercentSeekForward : g_advancedSettings.m_videoPercentSeekBackward;
-    seek = (__int64)(GetTotalTimeInMsec()*(GetPercentage()+percent)/100);
+    seek = (int64_t)(GetTotalTimeInMsec()*(GetPercentage()+percent)/100);
   }
 
   bool restore = true;
@@ -2308,7 +2352,7 @@ void CDVDPlayer::Seek(bool bPlus, bool bLargeStep)
     }
   }
 
-  __int64 time = GetTime();
+  int64_t time = GetTime();
   if(g_application.CurrentFileItem().IsStack() 
   && (seek > GetTotalTimeInMsec() || seek < 0))
   {
@@ -2333,7 +2377,7 @@ bool CDVDPlayer::SeekScene(bool bPlus)
    * There is a 5 second grace period applied when seeking for scenes backwards. If there is no
    * grace period applied it is impossible to go backwards past a scene marker.
    */
-  __int64 clock = GetTime();
+  int64_t clock = GetTime();
   if (!bPlus && clock > 5 * 1000) // 5 seconds
     clock -= 5 * 1000;
 
@@ -2352,23 +2396,25 @@ bool CDVDPlayer::SeekScene(bool bPlus)
 
 void CDVDPlayer::GetAudioInfo(CStdString& strAudioInfo)
 {
-  CSingleLock lock(m_StateSection);
-  strAudioInfo.Format("D(%s) P(%s)", m_State.demux_audio.c_str()
-                                   , m_dvdPlayerAudio.GetPlayerInfo().c_str());
+  { CSingleLock lock(m_StateSection);
+    strAudioInfo.Format("D(%s)", m_State.demux_audio.c_str());
+  }
+  strAudioInfo.AppendFormat(" P(%s)", m_dvdPlayerAudio.GetPlayerInfo().c_str());
 }
 
 void CDVDPlayer::GetVideoInfo(CStdString& strVideoInfo)
 {
-  CSingleLock lock(m_StateSection);
-  strVideoInfo.Format("D(%s) P(%s)", m_State.demux_video.c_str()
-                                   , m_dvdPlayerVideo.GetPlayerInfo().c_str());
+  { CSingleLock lock(m_StateSection);
+    strVideoInfo.Format("D(%s)", m_State.demux_video.c_str());
+  }
+  strVideoInfo.AppendFormat(" P(%s)", m_dvdPlayerVideo.GetPlayerInfo().c_str());
 }
 
 void CDVDPlayer::GetGeneralInfo(CStdString& strGeneralInfo)
 {
   if (!m_bStop)
   {
-    double dDelay = (double)m_dvdPlayerVideo.GetDelay() / DVD_TIME_BASE;
+    double dDelay = m_dvdPlayerVideo.GetDelay() / DVD_TIME_BASE - g_renderManager.GetDisplayLatency();
 
     double apts = m_dvdPlayerAudio.GetCurrentPts();
     double vpts = m_dvdPlayerVideo.GetCurrentPts();
@@ -2405,17 +2451,17 @@ void CDVDPlayer::GetGeneralInfo(CStdString& strGeneralInfo)
 
 void CDVDPlayer::SeekPercentage(float iPercent)
 {
-  __int64 iTotalTime = GetTotalTimeInMsec();
+  int64_t iTotalTime = GetTotalTimeInMsec();
 
   if (!iTotalTime)
     return;
 
-  SeekTime((__int64)(iTotalTime * iPercent / 100));
+  SeekTime((int64_t)(iTotalTime * iPercent / 100));
 }
 
 float CDVDPlayer::GetPercentage()
 {
-  __int64 iTotalTime = GetTotalTimeInMsec();
+  int64_t iTotalTime = GetTotalTimeInMsec();
 
   if (!iTotalTime)
     return 0.0f;
@@ -2452,9 +2498,8 @@ float CDVDPlayer::GetSubTitleDelay()
 // priority: 1: libdvdnav, 2: external subtitles, 3: muxed subtitles
 int CDVDPlayer::GetSubtitleCount()
 {
-  LockStreams();
+  StreamLock lock(this);
   m_SelectionStreams.Update(m_pInputStream, m_pDemuxer);
-  UnlockStreams();
   return m_SelectionStreams.Count(STREAM_SUBTITLE);
 }
 
@@ -2470,10 +2515,17 @@ void CDVDPlayer::GetSubtitleName(int iStream, CStdString &strStreamName)
   if(s.name.length() > 0)
     strStreamName = s.name;
   else
-    strStreamName = "Unknown";
+    strStreamName = g_localizeStrings.Get(13205); // Unknown
 
   if(s.type == STREAM_NONE)
     strStreamName += "(Invalid)";
+}
+
+void CDVDPlayer::GetSubtitleLanguage(int iStream, CStdString &strStreamLang)
+{
+  SelectionStream& s = m_SelectionStreams.Get(STREAM_SUBTITLE, iStream);
+  if (!g_LangCodeExpander.Lookup(strStreamLang, s.language))
+    strStreamLang = g_localizeStrings.Get(13205); // Unknown
 }
 
 void CDVDPlayer::SetSubtitle(int iStream)
@@ -2503,9 +2555,8 @@ void CDVDPlayer::SetSubtitleVisible(bool bVisible)
 
 int CDVDPlayer::GetAudioStreamCount()
 {
-  LockStreams();
+  StreamLock lock(this);
   m_SelectionStreams.Update(m_pInputStream, m_pDemuxer);
-  UnlockStreams();
   return m_SelectionStreams.Count(STREAM_AUDIO);
 }
 
@@ -2549,7 +2600,7 @@ void CDVDPlayer::LoadPage(int p, int sp, unsigned char* buffer)
   return m_dvdPlayerTeletext.LoadPage(p, sp, buffer);
 }
 
-void CDVDPlayer::SeekTime(__int64 iTime)
+void CDVDPlayer::SeekTime(int64_t iTime)
 {
   int seekOffset = (int)(iTime - GetTime());
   m_messenger.Put(new CDVDMsgPlayerSeek((int)iTime, true, true, true));
@@ -2558,7 +2609,7 @@ void CDVDPlayer::SeekTime(__int64 iTime)
 }
 
 // return the time in milliseconds
-__int64 CDVDPlayer::GetTime()
+int64_t CDVDPlayer::GetTime()
 {
   CSingleLock lock(m_StateSection);
   double offset = 0;
@@ -2573,7 +2624,7 @@ __int64 CDVDPlayer::GetTime()
 }
 
 // return length in msec
-__int64 CDVDPlayer::GetTotalTimeInMsec()
+int64_t CDVDPlayer::GetTotalTimeInMsec()
 {
   CSingleLock lock(m_StateSection);
   return llrint(m_State.time_total);
@@ -2646,7 +2697,7 @@ bool CDVDPlayer::OpenAudioStream(int iStream, int source)
   m_dvdPlayerAudio.SendMessage(new CDVDMsg(CDVDMsg::PLAYER_STARTED), 1);
 
   /* audio normally won't consume full cpu, so let it have prio */
-  m_dvdPlayerAudio.SetPriority(GetThreadPriority(*this)+1);
+  m_dvdPlayerAudio.SetPriority(GetPriority()+1);
 
   return true;
 }
@@ -2670,10 +2721,16 @@ bool CDVDPlayer::OpenVideoStream(int iStream, int source)
     /* set aspect ratio as requested by navigator for dvd's */
     float aspect = static_cast<CDVDInputStreamNavigator*>(m_pInputStream)->GetVideoAspectRatio();
     if(aspect != 0.0)
+    {
       hint.aspect = aspect;
+      hint.forced_aspect = true;
+    }
     hint.software = true;
-    hint.stills   = true;
   }
+
+  CDVDInputStream::IMenus* pMenus = dynamic_cast<CDVDInputStream::IMenus*>(m_pInputStream);
+  if(pMenus && pMenus->IsInMenu())
+    hint.stills = true;
 
   if(m_CurrentVideo.id    < 0
   || m_CurrentVideo.hint != hint)
@@ -2708,11 +2765,11 @@ bool CDVDPlayer::OpenVideoStream(int iStream, int source)
   // the CoreAudio audio device handler thread. We do the same for
   // the DVDPlayerVideo thread so it can run to sleep without getting
   // swapped out by a busy OS.
-  m_dvdPlayerVideo.SetPrioritySched_RR();
+  m_dvdPlayerVideo.SetPriority(GetSchedRRPriority());
 #else
   /* use same priority for video thread as demuxing thread, as */
   /* otherwise demuxer will starve if video consumes the full cpu */
-  m_dvdPlayerVideo.SetPriority(GetThreadPriority(*this));
+  m_dvdPlayerVideo.SetPriority(GetPriority());
 #endif
   return true;
 
@@ -2737,7 +2794,7 @@ bool CDVDPlayer::OpenSubtitleStream(int iStream, int source)
     {
       CLog::Log(LOGNOTICE, "Opening Subtitle file: %s", st.filename.c_str());
       auto_ptr<CDVDDemuxVobsub> demux(new CDVDDemuxVobsub());
-      if(!demux->Open(st.filename))
+      if(!demux->Open(st.filename, st.filename2))
         return false;
       m_pSubtitleDemuxer = demux.release();
     }
@@ -2751,6 +2808,7 @@ bool CDVDPlayer::OpenSubtitleStream(int iStream, int source)
       pts = m_CurrentVideo.dts;
     if(pts == DVD_NOPTS_VALUE)
       pts = 0;
+    pts += m_offset_pts;
     m_pSubtitleDemuxer->SeekTime((int)(1000.0 * pts / (double)DVD_TIME_BASE));
 
     hint.Assign(*pStream, true);
@@ -2929,6 +2987,10 @@ void CDVDPlayer::FlushBuffers(bool queued, double pts, bool accurate)
   else
     startpts = DVD_NOPTS_VALUE;
 
+  /* call with demuxer pts */
+  if(startpts != DVD_NOPTS_VALUE)
+    startpts -= m_offset_pts;
+
   m_CurrentAudio.inited      = false;
   m_CurrentAudio.dts         = DVD_NOPTS_VALUE;
   m_CurrentAudio.startpts    = startpts;
@@ -2969,8 +3031,8 @@ void CDVDPlayer::FlushBuffers(bool queued, double pts, bool accurate)
     {
       // make sure players are properly flushed, should put them in stalled state
       CDVDMsgGeneralSynchronize* msg = new CDVDMsgGeneralSynchronize(1000, 0);
-      m_dvdPlayerAudio.m_messageQueue.Put(msg->Acquire(), 1);
-      m_dvdPlayerVideo.m_messageQueue.Put(msg->Acquire(), 1);
+      m_dvdPlayerAudio.SendMessage(msg->Acquire(), 1);
+      m_dvdPlayerVideo.SendMessage(msg->Acquire(), 1);
       msg->Wait(&m_bStop, 0);
       msg->Release();
 
@@ -2994,6 +3056,22 @@ void CDVDPlayer::FlushBuffers(bool queued, double pts, bool accurate)
 // since we call ffmpeg functions to decode, this is being called in the same thread as ::Process() is
 int CDVDPlayer::OnDVDNavResult(void* pData, int iMessage)
 {
+  if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_BLURAY))
+  {
+    if(iMessage == 0)
+      m_overlayContainer.Add((CDVDOverlay*)pData);
+    else if(iMessage == 1)
+      m_messenger.Put(new CDVDMsg(CDVDMsg::GENERAL_FLUSH));
+    else if(iMessage == 2)
+      m_dvd.iSelectedAudioStream = *(int*)pData;
+    else if(iMessage == 3)
+      m_dvd.iSelectedSPUStream   = *(int*)pData;
+    else if(iMessage == 4)
+      m_dvdPlayerVideo.EnableSubtitle(*(int*)pData ? true: false);
+
+    return 0;
+  }
+
   if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
   {
     CDVDInputStreamNavigator* pStream = (CDVDInputStreamNavigator*)m_pInputStream;
@@ -3017,7 +3095,7 @@ int CDVDPlayer::OnDVDNavResult(void* pData, int iMessage)
           else
             m_dvd.iDVDStillTime = 0;
 
-          m_dvd.iDVDStillStartTime = CTimeUtils::GetTimeMS();
+          m_dvd.iDVDStillStartTime = XbmcThreads::SystemClockMillis();
 
           /* adjust for the output delay in the video queue */
           DWORD time = 0;
@@ -3088,23 +3166,13 @@ int CDVDPlayer::OnDVDNavResult(void* pData, int iMessage)
         //Make sure we clear all the old overlays here, or else old forced items are left.
         m_overlayContainer.Clear();
 
-        // reset the demuxer, this also imples closing the video and the audio system
-        // this is a bit tricky cause it's the demuxer that's is making this call in the end
-        // so we send a message to indicate the main loop that the demuxer needs a reset
-        // this also means the libdvdnav may not return any data packets after this command
-        m_messenger.Put(new CDVDMsgDemuxerReset());
-
         //Force an aspect ratio that is set in the dvdheaders if available
         m_CurrentVideo.hint.aspect = pStream->GetVideoAspectRatio();
-        if( m_dvdPlayerAudio.m_messageQueue.IsInited() )
+        if( m_dvdPlayerAudio.IsInited() )
           m_dvdPlayerVideo.SendMessage(new CDVDMsgDouble(CDVDMsg::VIDEO_SET_ASPECT, m_CurrentVideo.hint.aspect));
 
         m_SelectionStreams.Clear(STREAM_NONE, STREAM_SOURCE_NAV);
         m_SelectionStreams.Update(m_pInputStream, m_pDemuxer);
-
-        // we must hold here once more, otherwise the demuxer message
-        // will be executed after demuxer have filled with data
-        return NAVRESULT_HOLD;
       }
       break;
     case DVDNAV_CELL_CHANGE:
@@ -3114,7 +3182,7 @@ int CDVDPlayer::OnDVDNavResult(void* pData, int iMessage)
 
         m_dvd.state = DVDSTATE_NORMAL;
 
-        if( m_dvdPlayerVideo.m_messageQueue.IsInited() )
+        if( m_dvdPlayerVideo.IsInited() )
           m_dvdPlayerVideo.SendMessage(new CDVDMsg(CDVDMsg::VIDEO_NOSKIP));
       }
       break;
@@ -3168,12 +3236,10 @@ bool CDVDPlayer::OnAction(const CAction &action)
     } \
   } while(false)
 
-  if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+  CDVDInputStream::IMenus* pMenus = dynamic_cast<CDVDInputStream::IMenus*>(m_pInputStream);
+  if (pMenus)
   {
-    CDVDInputStreamNavigator* pStream = (CDVDInputStreamNavigator*)m_pInputStream;
-
-
-    if( m_dvd.state == DVDSTATE_STILL && m_dvd.iDVDStillTime != 0 && pStream->GetTotalButtons() == 0 )
+    if( m_dvd.state == DVDSTATE_STILL && m_dvd.iDVDStillTime != 0 && pMenus->GetTotalButtons() == 0 )
     {
       switch(action.GetID())
       {
@@ -3201,7 +3267,7 @@ bool CDVDPlayer::OnAction(const CAction &action)
       {
         THREAD_ACTION(action);
         CLog::Log(LOGDEBUG, " - pushed prev");
-        pStream->OnPrevious();
+        pMenus->OnPrevious();
         g_infoManager.SetDisplayAfterSeek();
         return true;
       }
@@ -3210,7 +3276,7 @@ bool CDVDPlayer::OnAction(const CAction &action)
       {
         THREAD_ACTION(action);
         CLog::Log(LOGDEBUG, " - pushed next");
-        pStream->OnNext();
+        pMenus->OnNext();
         g_infoManager.SetDisplayAfterSeek();
         return true;
       }
@@ -3220,7 +3286,7 @@ bool CDVDPlayer::OnAction(const CAction &action)
       {
         THREAD_ACTION(action);
         CLog::Log(LOGDEBUG, " - go to menu");
-        pStream->OnMenu();
+        pMenus->OnMenu();
         // send a message to everyone that we've gone to the menu
         CGUIMessage msg(GUI_MSG_VIDEO_MENU_STARTED, 0, 0);
         g_windowManager.SendMessage(msg);
@@ -3229,57 +3295,56 @@ bool CDVDPlayer::OnAction(const CAction &action)
       break;
     }
 
-    if (pStream->IsInMenu())
+    if (pMenus->IsInMenu())
     {
       switch (action.GetID())
       {
       case ACTION_NEXT_ITEM:
-      case ACTION_PAGE_UP:
         THREAD_ACTION(action);
         CLog::Log(LOGDEBUG, " - pushed next in menu, stream will decide");
-        pStream->OnNext();
+        pMenus->OnNext();
         g_infoManager.SetDisplayAfterSeek();
         return true;
       case ACTION_PREV_ITEM:
-      case ACTION_PAGE_DOWN:
         THREAD_ACTION(action);
         CLog::Log(LOGDEBUG, " - pushed prev in menu, stream will decide");
-        pStream->OnPrevious();
+        pMenus->OnPrevious();
         g_infoManager.SetDisplayAfterSeek();
         return true;
       case ACTION_PREVIOUS_MENU:
+      case ACTION_NAV_BACK:
         {
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - menu back");
-          pStream->OnBack();
+          pMenus->OnBack();
         }
         break;
       case ACTION_MOVE_LEFT:
         {
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - move left");
-          pStream->OnLeft();
+          pMenus->OnLeft();
         }
         break;
       case ACTION_MOVE_RIGHT:
         {
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - move right");
-          pStream->OnRight();
+          pMenus->OnRight();
         }
         break;
       case ACTION_MOVE_UP:
         {
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - move up");
-          pStream->OnUp();
+          pMenus->OnUp();
         }
         break;
       case ACTION_MOVE_DOWN:
         {
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - move down");
-          pStream->OnDown();
+          pMenus->OnDown();
         }
         break;
 
@@ -3298,8 +3363,8 @@ bool CDVDPlayer::OnAction(const CAction &action)
           pt.y *= rs.Height() / rd.Height();
           pt += CPoint(rs.x1, rs.y1);
           if (action.GetID() == ACTION_MOUSE_LEFT_CLICK)
-            return pStream->OnMouseClick(pt);
-          return pStream->OnMouseMove(pt);
+            return pMenus->OnMouseClick(pt);
+          return pMenus->OnMouseMove(pt);
         }
         break;
       case ACTION_SELECT_ITEM:
@@ -3307,9 +3372,10 @@ bool CDVDPlayer::OnAction(const CAction &action)
           THREAD_ACTION(action);
           CLog::Log(LOGDEBUG, " - button select");
           // show button pushed overlay
-          m_dvdPlayerSubtitle.UpdateOverlayInfo((CDVDInputStreamNavigator*)m_pInputStream, LIBDVDNAV_BUTTON_CLICKED);
+          if(m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+            m_dvdPlayerSubtitle.UpdateOverlayInfo((CDVDInputStreamNavigator*)m_pInputStream, LIBDVDNAV_BUTTON_CLICKED);
 
-          pStream->ActivateButton();
+          pMenus->ActivateButton();
         }
         break;
       case REMOTE_0:
@@ -3327,7 +3393,7 @@ bool CDVDPlayer::OnAction(const CAction &action)
           // Offset from key codes back to button number
           int button = action.GetID() - REMOTE_0;
           CLog::Log(LOGDEBUG, " - button pressed %d", button);
-          pStream->SelectButton(button);
+          pMenus->SelectButton(button);
         }
        break;
       default:
@@ -3343,14 +3409,12 @@ bool CDVDPlayer::OnAction(const CAction &action)
     switch (action.GetID())
     {
       case ACTION_NEXT_ITEM:
-      case ACTION_PAGE_UP:
         m_messenger.Put(new CDVDMsg(CDVDMsg::PLAYER_CHANNEL_NEXT));
         g_infoManager.SetDisplayAfterSeek();
         return true;
       break;
 
       case ACTION_PREV_ITEM:
-      case ACTION_PAGE_DOWN:
         m_messenger.Put(new CDVDMsg(CDVDMsg::PLAYER_CHANNEL_PREV));
         g_infoManager.SetDisplayAfterSeek();
         return true;
@@ -3371,7 +3435,6 @@ bool CDVDPlayer::OnAction(const CAction &action)
   switch (action.GetID())
   {
     case ACTION_NEXT_ITEM:
-    case ACTION_PAGE_UP:
       if(GetChapterCount() > 0)
       {
         m_messenger.Put(new CDVDMsgPlayerSeekChapter(GetChapter()+1));
@@ -3381,7 +3444,6 @@ bool CDVDPlayer::OnAction(const CAction &action)
       else
         break;
     case ACTION_PREV_ITEM:
-    case ACTION_PAGE_DOWN:
       if(GetChapterCount() > 0)
       {
         m_messenger.Put(new CDVDMsgPlayerSeekChapter(GetChapter()-1));
@@ -3398,9 +3460,9 @@ bool CDVDPlayer::OnAction(const CAction &action)
 
 bool CDVDPlayer::IsInMenu() const
 {
-  if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+  CDVDInputStream::IMenus* pStream = dynamic_cast<CDVDInputStream::IMenus*>(m_pInputStream);
+  if (pStream)
   {
-    CDVDInputStreamNavigator* pStream = (CDVDInputStreamNavigator*)m_pInputStream;
     if( m_dvd.state == DVDSTATE_STILL )
       return true;
     else
@@ -3411,7 +3473,8 @@ bool CDVDPlayer::IsInMenu() const
 
 bool CDVDPlayer::HasMenu()
 {
-  if (m_pInputStream && m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+  CDVDInputStream::IMenus* pStream = dynamic_cast<CDVDInputStream::IMenus*>(m_pInputStream);
+  if (pStream)
     return true;
   else
     return false;
@@ -3427,7 +3490,7 @@ bool CDVDPlayer::GetCurrentSubtitle(CStdString& strSubtitle)
   m_dvdPlayerSubtitle.GetCurrentSubtitle(strSubtitle, pts - m_dvdPlayerVideo.GetSubtitleDelay());
   
   // In case we stalled, don't output any subs
-  if (m_dvdPlayerVideo.IsStalled() || m_dvdPlayerAudio.IsStalled())
+  if ((m_dvdPlayerVideo.IsStalled() && HasVideo()) || (m_dvdPlayerAudio.IsStalled() && HasAudio()))
     strSubtitle = m_lastSub;
   else
     m_lastSub = strSubtitle;
@@ -3502,8 +3565,8 @@ int CDVDPlayer::GetCacheLevel() const
 
 double CDVDPlayer::GetQueueTime()
 {
-  int a = m_dvdPlayerAudio.m_messageQueue.GetLevel();
-  int v = m_dvdPlayerVideo.m_messageQueue.GetLevel();
+  int a = m_dvdPlayerAudio.GetLevel();
+  int v = m_dvdPlayerVideo.GetLevel();
   return max(a, v) * 8000.0 / 100;
 }
 
@@ -3541,6 +3604,7 @@ int CDVDPlayer::AddSubtitleFile(const std::string& filename, const std::string& 
     m_SelectionStreams.Update(NULL, &v);
     int index = m_SelectionStreams.IndexOf(STREAM_SUBTITLE, m_SelectionStreams.Source(STREAM_SOURCE_DEMUX_SUB, filename), 0);
     m_SelectionStreams.Get(STREAM_SUBTITLE, index).flags = flags;
+    m_SelectionStreams.Get(STREAM_SUBTITLE, index).filename2 = vobsubfile;
     return index;
   }
   if(ext == ".sub")
@@ -3562,27 +3626,27 @@ int CDVDPlayer::AddSubtitleFile(const std::string& filename, const std::string& 
 
 void CDVDPlayer::UpdatePlayState(double timeout)
 {
-  CSingleLock lock(m_StateSection);
-
   if(m_State.timestamp != 0
   && m_State.timestamp + DVD_MSEC_TO_TIME(timeout) > CDVDClock::GetAbsoluteClock())
     return;
 
+  SPlayerState state(m_State);
+
   if     (m_CurrentVideo.dts != DVD_NOPTS_VALUE)
-    m_State.dts = m_CurrentVideo.dts;
+    state.dts = m_CurrentVideo.dts;
   else if(m_CurrentAudio.dts != DVD_NOPTS_VALUE)
-    m_State.dts = m_CurrentAudio.dts;
+    state.dts = m_CurrentAudio.dts;
   else
-    m_State.dts = m_clock.GetClock();
+    state.dts = m_clock.GetClock();
 
   if(m_pDemuxer)
   {
-    m_State.chapter       = m_pDemuxer->GetChapter();
-    m_State.chapter_count = m_pDemuxer->GetChapterCount();
-    m_pDemuxer->GetChapterName(m_State.chapter_name);
+    state.chapter       = m_pDemuxer->GetChapter();
+    state.chapter_count = m_pDemuxer->GetChapterCount();
+    m_pDemuxer->GetChapterName(state.chapter_name);
 
-    m_State.time       = DVD_TIME_TO_MSEC(m_clock.GetClock());
-    m_State.time_total = m_pDemuxer->GetStreamLength();
+    state.time       = DVD_TIME_TO_MSEC(m_clock.GetClock() + m_offset_pts);
+    state.time_total = m_pDemuxer->GetStreamLength();
   }
 
   if(m_pInputStream)
@@ -3591,95 +3655,98 @@ void CDVDPlayer::UpdatePlayState(double timeout)
 
     if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_TV))
     {
-      m_State.canrecord = static_cast<CDVDInputStreamTV*>(m_pInputStream)->CanRecord();
-      m_State.recording = static_cast<CDVDInputStreamTV*>(m_pInputStream)->IsRecording();
+      state.canrecord = static_cast<CDVDInputStreamTV*>(m_pInputStream)->CanRecord();
+      state.recording = static_cast<CDVDInputStreamTV*>(m_pInputStream)->IsRecording();
     }
 
     CDVDInputStream::IDisplayTime* pDisplayTime = dynamic_cast<CDVDInputStream::IDisplayTime*>(m_pInputStream);
     if (pDisplayTime)
     {
-      m_State.time       = pDisplayTime->GetTime();
-      m_State.time_total = pDisplayTime->GetTotalTime();
+      state.time       = pDisplayTime->GetTime();
+      state.time_total = pDisplayTime->GetTotalTime();
     }
 
-    if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
+    if (dynamic_cast<CDVDInputStream::IMenus*>(m_pInputStream))
     {
       if(m_dvd.state == DVDSTATE_STILL)
       {
-        m_State.time       = CTimeUtils::GetTimeMS() - m_dvd.iDVDStillStartTime;
-        m_State.time_total = m_dvd.iDVDStillTime;
+        state.time       = XbmcThreads::SystemClockMillis() - m_dvd.iDVDStillStartTime;
+        state.time_total = m_dvd.iDVDStillTime;
       }
-
-      if(!((CDVDInputStreamNavigator*)m_pInputStream)->GetNavigatorState(m_State.player_state))
-        m_State.player_state = "";
     }
-    else
-        m_State.player_state = "";
-
 
     if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_TV))
     {
       if(((CDVDInputStreamTV*)m_pInputStream)->GetTotalTime() > 0)
       {
-        m_State.time      -= ((CDVDInputStreamTV*)m_pInputStream)->GetStartTime();
-        m_State.time_total = ((CDVDInputStreamTV*)m_pInputStream)->GetTotalTime();
+        state.time      -= ((CDVDInputStreamTV*)m_pInputStream)->GetStartTime();
+        state.time_total = ((CDVDInputStreamTV*)m_pInputStream)->GetTotalTime();
       }
     }
   }
 
   if (m_Edl.HasCut())
   {
-    m_State.time        = m_Edl.RemoveCutTime(llrint(m_State.time));
-    m_State.time_total  = m_Edl.RemoveCutTime(llrint(m_State.time_total));
+    state.time        = m_Edl.RemoveCutTime(llrint(state.time));
+    state.time_total  = m_Edl.RemoveCutTime(llrint(state.time_total));
   }
 
+  state.player_state = "";
   if (m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
-    m_State.time_offset = DVD_MSEC_TO_TIME(m_State.time) - m_State.dts;
+  {
+    state.time_offset = DVD_MSEC_TO_TIME(state.time) - state.dts;
+    if(!((CDVDInputStreamNavigator*)m_pInputStream)->GetNavigatorState(state.player_state))
+      state.player_state = "";
+  }
   else
-    m_State.time_offset = 0;
+    state.time_offset = 0;
 
   if (m_CurrentAudio.id >= 0 && m_pDemuxer)
   {
     CDemuxStream* pStream = m_pDemuxer->GetStream(m_CurrentAudio.id);
     if (pStream && pStream->type == STREAM_AUDIO)
-      ((CDemuxStreamAudio*)pStream)->GetStreamInfo(m_State.demux_audio);
+      ((CDemuxStreamAudio*)pStream)->GetStreamInfo(state.demux_audio);
   }
   else
-    m_State.demux_audio = "";
+    state.demux_audio = "";
 
   if (m_CurrentVideo.id >= 0 && m_pDemuxer)
   {
     CDemuxStream* pStream = m_pDemuxer->GetStream(m_CurrentVideo.id);
     if (pStream && pStream->type == STREAM_VIDEO)
-      ((CDemuxStreamVideo*)pStream)->GetStreamInfo(m_State.demux_video);
+      ((CDemuxStreamVideo*)pStream)->GetStreamInfo(state.demux_video);
   }
   else
-    m_State.demux_video = "";
+    state.demux_video = "";
 
   double level, delay, offset;
   if(GetCachingTimes(level, delay, offset))
   {
-    m_State.cache_delay  = max(0.0, delay);
-    m_State.cache_level  = max(0.0, min(1.0, level));
-    m_State.cache_offset = offset;
+    state.cache_delay  = max(0.0, delay);
+    state.cache_level  = max(0.0, min(1.0, level));
+    state.cache_offset = offset;
   }
   else
   {
-    m_State.cache_delay  = 0.0;
-    m_State.cache_level  = min(1.0, GetQueueTime() / 8000.0);
-    m_State.cache_offset = GetQueueTime() / m_State.time_total;
+    state.cache_delay  = 0.0;
+    state.cache_level  = min(1.0, GetQueueTime() / 8000.0);
+    state.cache_offset = GetQueueTime() / state.time_total;
   }
 
-  if(m_pInputStream && m_pInputStream->GetCachedBytes() >= 0)
+  XFILE::SCacheStatus status;
+  if(m_pInputStream && m_pInputStream->GetCacheStatus(&status))
   {
-    m_State.cache_bytes = m_pInputStream->GetCachedBytes();
-    if(m_State.time_total)
-      m_State.cache_bytes += m_pInputStream->GetLength() * GetQueueTime() / m_State.time_total;
+    state.cache_bytes = status.forward;
+    if(state.time_total)
+      state.cache_bytes += m_pInputStream->GetLength() * GetQueueTime() / state.time_total;
   }
   else
-    m_State.cache_bytes = 0;
+    state.cache_bytes = 0;
 
-  m_State.timestamp = CDVDClock::GetAbsoluteClock();
+  state.timestamp = CDVDClock::GetAbsoluteClock();
+
+  CSingleLock lock(m_StateSection);
+  m_State = state;
 }
 
 void CDVDPlayer::UpdateApplication(double timeout)
@@ -3777,7 +3844,7 @@ bool CDVDPlayer::GetStreamDetails(CStreamDetails &details)
   if (m_pDemuxer)
   {
     bool result=CDVDFileInfo::DemuxerToStreamDetails(m_pInputStream, m_pDemuxer, details);
-    if (result && ((CStreamDetailVideo*)details.GetStreamCount(CStreamDetail::VIDEO) > 0)) // this is more correct (dvds in particular)
+    if (result && details.GetStreamCount(CStreamDetail::VIDEO) > 0) // this is more correct (dvds in particular)
     {
       GetVideoAspectRatio(((CStreamDetailVideo*)details.GetNthStream(CStreamDetail::VIDEO,0))->m_fAspect);
       ((CStreamDetailVideo*)details.GetNthStream(CStreamDetail::VIDEO,0))->m_iDuration = GetTotalTime();

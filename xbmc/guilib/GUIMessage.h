@@ -6,8 +6,6 @@
 #ifndef GUILIB_MESSAGE_H
 #define GUILIB_MESSAGE_H
 
-#include "GUIActionDescriptor.h"
-
 #pragma once
 
 /*
@@ -116,6 +114,21 @@
  \brief A request for supported gestures is made
  */
 #define GUI_MSG_GESTURE_NOTIFY  38
+
+/*!
+ \brief A request to add a control
+ */
+#define GUI_MSG_ADD_CONTROL     39
+
+/*!
+ \brief A request to remove a control
+ */
+#define GUI_MSG_REMOVE_CONTROL  40
+
+/*!
+ \brief A request to unfocus all currently focused controls
+ */
+#define GUI_MSG_UNFOCUS_ALL 41
 
 #define GUI_MSG_USER         1000
 
@@ -256,7 +269,7 @@ do { \
 } while(0)
 
 #include <vector>
-#include "boost/shared_ptr.hpp"
+#include <boost/shared_ptr.hpp>
 #include "utils/StdString.h"
 
 // forwards
@@ -294,13 +307,10 @@ public:
   void SetStringParams(const std::vector<CStdString> &params);
   const CStdString& GetStringParam(size_t param = 0) const;
   size_t GetNumStringParams() const;
-  void SetAction(const CGUIActionDescriptor& action);
-  const CGUIActionDescriptor& GetAction() const;
 
 private:
   std::string m_strLabel;
   std::vector<CStdString> m_params;
-  CGUIActionDescriptor m_action;
   int m_senderID;
   int m_controlID;
   int m_message;

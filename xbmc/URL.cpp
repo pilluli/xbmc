@@ -159,7 +159,9 @@ void CURL::Parse(const CStdString& strURL1)
 
   CStdString strProtocol2 = GetTranslatedProtocol();
   if(m_strProtocol.Equals("rss") ||
-     m_strProtocol.Equals("addons"))
+     m_strProtocol.Equals("rar") ||
+     m_strProtocol.Equals("addons") ||
+     m_strProtocol.Equals("image"))
     sep = "?";
   else
   if(strProtocol2.Equals("http")
@@ -287,6 +289,7 @@ void CURL::Parse(const CStdString& strURL1)
   if (m_strProtocol.CompareNoCase("iso9660") == 0
     || m_strProtocol.CompareNoCase("musicdb") == 0
     || m_strProtocol.CompareNoCase("videodb") == 0
+    || m_strProtocol.CompareNoCase("sources") == 0
     || m_strProtocol.CompareNoCase("lastfm") == 0
     || m_strProtocol.Left(3).CompareNoCase("mem") == 0)
   {
@@ -312,7 +315,7 @@ void CURL::Parse(const CStdString& strURL1)
   SetFileName(m_strFileName);
 
   /* decode urlencoding on this stuff */
-  if( m_strProtocol.Equals("rar") || m_strProtocol.Equals("zip") || m_strProtocol.Equals("musicsearch"))
+  if(URIUtils::ProtocolHasEncodedHostname(m_strProtocol))
   {
     Decode(m_strHostName);
     // Validate it as it is likely to contain a filename
@@ -528,9 +531,9 @@ CStdString CURL::GetWithoutUserDetails() const
     vector<CStdString> newItems;
     for (int i=0;i<items.Size();++i)
     {
-      CURL url(items[i]->m_strPath);
-      items[i]->m_strPath = url.GetWithoutUserDetails();
-      newItems.push_back(items[i]->m_strPath);
+      CURL url(items[i]->GetPath());
+      items[i]->SetPath(url.GetWithoutUserDetails());
+      newItems.push_back(items[i]->GetPath());
     }
     dir.ConstructStackPath(newItems,strURL);
     return strURL;
@@ -554,7 +557,7 @@ CStdString CURL::GetWithoutUserDetails() const
 
   if (m_strHostName != "")
   {
-    if (m_strProtocol.Equals("rar") || m_strProtocol.Equals("zip"))
+    if (URIUtils::ProtocolHasParentInHostname(m_strProtocol))
       strURL += CURL(m_strHostName).GetWithoutUserDetails();
     else
       strURL += m_strHostName;
@@ -616,7 +619,7 @@ CStdString CURL::GetWithoutFilename() const
 
   if (m_strHostName != "")
   {
-    if( m_strProtocol.Equals("rar") || m_strProtocol.Equals("zip") || m_strProtocol.Equals("musicsearch"))
+    if( URIUtils::ProtocolHasEncodedHostname(m_strProtocol) )
       strURL += URLEncodeInline(m_strHostName);
     else
       strURL += m_strHostName;
@@ -635,7 +638,12 @@ CStdString CURL::GetWithoutFilename() const
 
 bool CURL::IsLocal() const
 {
-  return m_strProtocol.IsEmpty();
+  return (IsLocalHost() || m_strProtocol.IsEmpty());
+}
+
+bool CURL::IsLocalHost() const
+{
+  return (m_strHostName.Equals("localhost") || m_strHostName.Equals("127.0.0.1"));
 }
 
 bool CURL::IsFileOnly(const CStdString &url)
@@ -648,6 +656,7 @@ bool CURL::IsFullPath(const CStdString &url)
   if (url.size() && url[0] == '/') return true;     //   /foo/bar.ext
   if (url.Find("://") >= 0) return true;                 //   foo://bar.ext
   if (url.size() > 1 && url[1] == ':') return true; //   c:\\foo\\bar\\bar.ext
+  if (url.compare(0,2,"\\\\") == 0) return true;    //   \\UNC\path\to\file
   return false;
 }
 

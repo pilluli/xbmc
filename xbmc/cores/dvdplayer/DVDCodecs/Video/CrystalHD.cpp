@@ -23,6 +23,8 @@
 #if defined(_WIN32)
 #include "WIN32Util.h"
 #include "util.h"
+#include "dialogs/GUIDialogKaiToast.h"
+#include "guilib/LocalizeStrings.h"
 #endif
 
 #if defined(HAVE_LIBCRYSTALHD)
@@ -37,6 +39,7 @@
 #include "utils/fastmemcpy.h"
 #include "DllSwScale.h"
 #include "utils/TimeUtils.h"
+#include "windowing/WindowingFactory.h"
 
 namespace BCM
 {
@@ -217,6 +220,7 @@ protected:
   void                CopyOutAsNV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
   void                CopyOutAsYV12(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
   void                CopyOutAsYV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
+  void                CheckUpperLeftGreenPixelHack(CPictureBuffer *pBuffer);
   bool                GetDecoderOutput(void);
   virtual void        Process(void);
 
@@ -228,9 +232,11 @@ protected:
   bool                m_has_bcm70015;
   unsigned int        m_timeout;
   bool                m_format_valid;
+  bool                m_is_live_stream;
   int                 m_width;
   int                 m_height;
   uint64_t            m_timestamp;
+  bool                m_output_YV12;
   uint64_t            m_PictureNumber;
   uint8_t             m_color_space;
   unsigned int        m_color_range;
@@ -251,7 +257,7 @@ protected:
 #if defined(__APPLE__)
 #pragma mark -
 #endif
-CPictureBuffer::CPictureBuffer(DVDVideoPicture::EFormat format, int width, int height)
+CPictureBuffer::CPictureBuffer(ERenderFormat format, int width, int height)
 {
   m_width = width;
   m_height = height;
@@ -267,7 +273,7 @@ CPictureBuffer::CPictureBuffer(DVDVideoPicture::EFormat format, int width, int h
   switch(m_format)
   {
     default:
-    case DVDVideoPicture::FMT_NV12:
+    case RENDER_FMT_NV12:
       // setup y plane
       m_y_buffer_size = m_width * m_height;
       m_y_buffer_ptr = (unsigned char*)_aligned_malloc(m_y_buffer_size, 16);
@@ -279,7 +285,7 @@ CPictureBuffer::CPictureBuffer(DVDVideoPicture::EFormat format, int width, int h
       m_uv_buffer_size = m_y_buffer_size / 2;
       m_uv_buffer_ptr = (unsigned char*)_aligned_malloc(m_uv_buffer_size, 16);
     break;
-    case DVDVideoPicture::FMT_YUY2:
+    case RENDER_FMT_YUYV422:
       // setup y plane
       m_y_buffer_size = (2 * m_width) * m_height;
       m_y_buffer_ptr = (unsigned char*)_aligned_malloc(m_y_buffer_size, 16);
@@ -291,7 +297,7 @@ CPictureBuffer::CPictureBuffer(DVDVideoPicture::EFormat format, int width, int h
       m_u_buffer_ptr = NULL;
       m_v_buffer_ptr = NULL;
     break;
-    case DVDVideoPicture::FMT_YUV420P:
+    case RENDER_FMT_YUV420P:
       // setup y plane
       m_y_buffer_size = m_width * m_height;
       m_y_buffer_ptr = (unsigned char*)_aligned_malloc(m_y_buffer_size, 16);
@@ -319,12 +325,13 @@ CPictureBuffer::~CPictureBuffer()
 #pragma mark -
 #endif
 CMPCOutputThread::CMPCOutputThread(void *device, DllLibCrystalHD *dll, bool has_bcm70015) :
-  CThread(),
+  CThread("CMPCOutputThread"),
   m_dll(dll),
   m_device(device),
   m_has_bcm70015(has_bcm70015),
   m_timeout(20),
   m_format_valid(false),
+  m_is_live_stream(false),
   m_framerate_tracking(false),
   m_framerate_cnt(0),
   m_framerate_timestamp(0.0),
@@ -333,6 +340,12 @@ CMPCOutputThread::CMPCOutputThread(void *device, DllLibCrystalHD *dll, bool has_
   m_sw_scale_ctx = NULL;
   m_dllSwScale = new DllSwScale;
   m_dllSwScale->Load();
+
+  
+  if (g_Windowing.GetRenderQuirks() & RENDER_QUIRKS_YV12_PREFERED)
+    m_output_YV12 = true;
+  else
+    m_output_YV12 = false;
 }
 
 CMPCOutputThread::~CMPCOutputThread()
@@ -378,10 +391,25 @@ void CMPCOutputThread::DoFrameRateTracking(double timestamp)
   if (timestamp != DVD_NOPTS_VALUE)
   {
     double duration;
+    // if timestamp does not start at a low value we 
+    // came in the middle of an online live stream
+    // 250 ms is a fourth of a 25fps source
+    // if timestamp is larger than that at the beginning
+    // we are much more out of sync than with the rough 
+    // calculation. To cover these 250 ms we need
+    // roughly 5 seconds of video stream to get back
+    // in sync
+    if (m_framerate_cnt == 0 && timestamp > 250000.0)
+      m_is_live_stream = true;
+    
     duration = timestamp - m_framerate_timestamp;
     if (duration > 0.0)
     {
       double framerate;
+      // cnt count has to be done here, cause we miss frames
+      // if framerate will not calculated correctly and
+      // duration has to be > 0.0 so we do not calc images twice
+      m_framerate_cnt++;
 
       m_framerate_timestamp += duration;
       framerate = DVD_TIME_BASE / duration;
@@ -400,8 +428,9 @@ void CMPCOutputThread::DoFrameRateTracking(double timestamp)
         case 30:
         case 25:
         case 24:
-          m_framerate_cnt++;
-          m_framerate = DVD_TIME_BASE / (m_framerate_timestamp/m_framerate_cnt);
+          // if we have such a live stream framerate is more exact than calculating
+          // cause of m_framerate_cnt and timestamp do not match in any way
+          m_framerate = m_is_live_stream ? framerate : DVD_TIME_BASE / (m_framerate_timestamp/m_framerate_cnt);
         break;
       }
     }
@@ -733,6 +762,46 @@ void CMPCOutputThread::CopyOutAsNV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC
   pBuffer->m_interlace = false;
 }
 
+void CMPCOutputThread::CheckUpperLeftGreenPixelHack(CPictureBuffer *pBuffer)
+{
+  // crystalhd driver sends internal info in 1st pixel location, then restores
+  // original pixel value but sometimes, the info is broked and the
+  // driver cannot do the restore and zeros the pixel. This is wrong for
+  // yuv color space, uv values should be set to 128 otherwise we get a
+  // bright green pixel in upper left.
+  // We fix this by replicating the 2nd pixel to the 1st.
+  switch(pBuffer->m_format)
+  {
+    default:
+    case RENDER_FMT_YUV420P:
+    {
+      uint8_t *d_y = pBuffer->m_y_buffer_ptr;
+      uint8_t *d_u = pBuffer->m_u_buffer_ptr;
+      uint8_t *d_v = pBuffer->m_v_buffer_ptr;
+      d_y[0] = d_y[1];
+      d_u[0] = d_u[1];
+      d_v[0] = d_v[1];
+    }
+    break;
+
+    case RENDER_FMT_NV12:
+    {
+      uint8_t  *d_y  = pBuffer->m_y_buffer_ptr;
+      uint16_t *d_uv = (uint16_t*)pBuffer->m_uv_buffer_ptr;
+      d_y[0] = d_y[1];
+      d_uv[0] = d_uv[1];
+    }
+    break;
+
+    case RENDER_FMT_YUYV422:
+    {
+      uint32_t *d_yuyv = (uint32_t*)pBuffer->m_y_buffer_ptr;
+      d_yuyv[0] = d_yuyv[1];
+    }
+    break;
+  }
+}
+
 bool CMPCOutputThread::GetDecoderOutput(void)
 {
   BCM::BC_STATUS ret;
@@ -771,15 +840,19 @@ bool CMPCOutputThread::GetDecoderOutput(void)
           if (!pBuffer)
           {
             // No free pre-allocated buffers so make one
-#ifdef _WIN32
-            // force Windows to use YV12 until DX renderer gets NV12 or YUY2 capability.
-            pBuffer = new CPictureBuffer(DVDVideoPicture::FMT_YUV420P, m_width, m_height);
-#else
-            if (m_color_space == BCM::MODE422_YUY2)
-              pBuffer = new CPictureBuffer(DVDVideoPicture::FMT_YUY2, m_width, m_height);
+            if (m_output_YV12)
+            {
+              // output YV12, nouveau driver has slow NV12, YUY2 capability.
+              pBuffer = new CPictureBuffer(RENDER_FMT_YUV420P, m_width, m_height);
+            }
             else
-              pBuffer = new CPictureBuffer(DVDVideoPicture::FMT_NV12, m_width, m_height);
-#endif
+            {
+              if (m_color_space == BCM::MODE422_YUY2)
+                pBuffer = new CPictureBuffer(RENDER_FMT_YUYV422, m_width, m_height);
+              else
+                pBuffer = new CPictureBuffer(RENDER_FMT_NV12, m_width, m_height);
+            }
+
             CLog::Log(LOGDEBUG, "%s: Added a new Buffer, ReadyListCount: %d", __MODULE_NAME__, m_ReadyList.Count());
             while (!m_bStop && m_ReadyList.Count() > 10)
               Sleep(1);
@@ -816,13 +889,13 @@ bool CMPCOutputThread::GetDecoderOutput(void)
           {
             switch(pBuffer->m_format)
             {
-              case DVDVideoPicture::FMT_NV12:
+              case RENDER_FMT_NV12:
                 if (pBuffer->m_interlace)
                   CopyOutAsNV12DeInterlace(pBuffer, &procOut, w, h, stride);
                 else
                   CopyOutAsNV12(pBuffer, &procOut, w, h, stride);
               break;
-              case DVDVideoPicture::FMT_YUV420P:
+              case RENDER_FMT_YUV420P:
                 if (pBuffer->m_interlace)
                   CopyOutAsYV12DeInterlace(pBuffer, &procOut, w, h, stride);
                 else
@@ -836,7 +909,7 @@ bool CMPCOutputThread::GetDecoderOutput(void)
           {
             switch(pBuffer->m_format)
             {
-              case DVDVideoPicture::FMT_YUY2:
+              case RENDER_FMT_YUYV422:
                 if (pBuffer->m_interlace)
                 {
                   // do simple line doubling de-interlacing.
@@ -859,7 +932,7 @@ bool CMPCOutputThread::GetDecoderOutput(void)
                   fast_memcpy(pBuffer->m_y_buffer_ptr,  procOut.Ybuff, pBuffer->m_y_buffer_size);
                 }
               break;
-              case DVDVideoPicture::FMT_YUV420P:
+              case RENDER_FMT_YUV420P:
                 // TODO: deinterlace for yuy2 -> yv12, icky
                 {
                   // Perform the color space conversion.
@@ -880,6 +953,7 @@ bool CMPCOutputThread::GetDecoderOutput(void)
             }
           }
 
+          CheckUpperLeftGreenPixelHack(pBuffer);
           m_ReadyList.Push(pBuffer);
           m_ready_event.Set();
           got_picture = true;
@@ -1032,9 +1106,8 @@ CCrystalHD::CCrystalHD() :
 #if (HAVE_LIBCRYSTALHD == 2)
     if (m_device && m_new_lib)
     {
-      BCM::BC_INFO_CRYSTAL bc_info_crystal;
-      m_dll->DtsCrystalHDVersion(m_device, &bc_info_crystal);
-      m_has_bcm70015 = (bc_info_crystal.device == 1);
+      m_dll->DtsCrystalHDVersion(m_device, (BCM::PBC_INFO_CRYSTAL)&m_bc_info_crystal);
+      m_has_bcm70015 = (m_bc_info_crystal.device == 1);
       // bcm70012 can do nv12 (420), yuy2 (422) and uyvy (422)
       // bcm70015 can do only yuy2 (422)
       if (m_has_bcm70015)
@@ -1156,6 +1229,22 @@ bool CCrystalHD::OpenDecoder(CRYSTALHD_CODEC_TYPE codec_type, CDVDStreamInfo &hi
   OpenDevice();
   if (!m_device)
     return false;
+
+#if (HAVE_LIBCRYSTALHD == 2) && defined(TARGET_WINDOWS)
+  // Drivers prior to 3.6.9.32 don't have proper support for CRYSTALHD_CODEC_ID_AVC1
+  // The internal version numbers are different for some reason...
+  if (   (m_bc_info_crystal.dilVersion.dilRelease < 3)
+      || (m_bc_info_crystal.dilVersion.dilRelease == 3 && m_bc_info_crystal.dilVersion.dilMajor < 22)
+      || (m_bc_info_crystal.drvVersion.drvRelease < 3)
+      || (m_bc_info_crystal.drvVersion.drvRelease == 3 && m_bc_info_crystal.drvVersion.drvMajor < 7) )
+  {
+    CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Warning, "CrystalHD", g_localizeStrings.Get(2101));
+    CLog::Log(LOGWARNING, "CrystalHD drivers too old, please upgrade to 3.6.9 or later. Make sure to uninstall the old version first or the upgrade won't work.");
+
+    if (codec_type == CRYSTALHD_CODEC_ID_AVC1)
+      return false;
+  }
+#endif
 
   uint32_t videoAlg = 0;
   switch (codec_type)
@@ -1488,9 +1577,8 @@ bool CCrystalHD::AddInput(unsigned char *pData, size_t size, double dts, double 
       }
     }
 
-    bool wait_state;
     if (m_pOutputThread->GetReadyCount() < 1)
-      wait_state = m_pOutputThread->WaitOutput(m_wait_timeout);
+      m_pOutputThread->WaitOutput(m_wait_timeout);
   }
 
   return true;
@@ -1537,7 +1625,7 @@ bool CCrystalHD::GetPicture(DVDVideoPicture *pDvdVideoPicture)
   switch(pBuffer->m_format)
   {
     default:
-    case DVDVideoPicture::FMT_NV12:
+    case RENDER_FMT_NV12:
       // Y plane
       pDvdVideoPicture->data[0] = (BYTE*)pBuffer->m_y_buffer_ptr;
       pDvdVideoPicture->iLineSize[0] = pBuffer->m_width;
@@ -1548,7 +1636,7 @@ bool CCrystalHD::GetPicture(DVDVideoPicture *pDvdVideoPicture)
       pDvdVideoPicture->data[2] = NULL;
       pDvdVideoPicture->iLineSize[2] = 0;
     break;
-    case DVDVideoPicture::FMT_YUY2:
+    case RENDER_FMT_YUYV422:
       // YUV packed plane
       pDvdVideoPicture->data[0] = (BYTE*)pBuffer->m_y_buffer_ptr;
       pDvdVideoPicture->iLineSize[0] = pBuffer->m_width * 2;
@@ -1559,7 +1647,7 @@ bool CCrystalHD::GetPicture(DVDVideoPicture *pDvdVideoPicture)
       pDvdVideoPicture->data[2] = NULL;
       pDvdVideoPicture->iLineSize[2] = 0;
     break;
-    case DVDVideoPicture::FMT_YUV420P:
+    case RENDER_FMT_YUV420P:
       // Y plane
       pDvdVideoPicture->data[0] = (BYTE*)pBuffer->m_y_buffer_ptr;
       pDvdVideoPicture->iLineSize[0] = pBuffer->m_width;

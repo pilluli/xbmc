@@ -56,7 +56,10 @@ public:
   // waits until all available data has been rendered
   // just waiting for packetqueue should be enough for video
   void WaitForBuffers()                             { m_messageQueue.WaitUntilEmpty(); }
-  bool AcceptsData()                                { return !m_messageQueue.IsFull(); }
+  bool AcceptsData() const                          { return !m_messageQueue.IsFull(); }
+  bool HasData() const                              { return m_messageQueue.GetDataSize() > 0; }
+  int  GetLevel();
+  bool IsInited() const                             { return m_messageQueue.IsInited(); }
   void SendMessage(CDVDMsg* pMsg, int priority = 0) { m_messageQueue.Put(pMsg, priority); }
 
 #ifdef HAS_VIDEO_PLAYBACK
@@ -96,9 +99,6 @@ public:
   void SetSpeed(int iSpeed);
 
   // classes
-  CDVDMessageQueue m_messageQueue;
-  CDVDMessageQueue& m_messageParent;
-
   CDVDOverlayContainer* m_pOverlayContainer;
 
   CDVDClock* m_pClock;
@@ -116,11 +116,14 @@ protected:
   void AutoCrop(DVDVideoPicture *pPicture, RECT &crop);
   CRect m_crop;
 
-  int OutputPicture(DVDVideoPicture* pPicture, double pts);
+  int OutputPicture(const DVDVideoPicture* src, double pts);
 #ifdef HAS_VIDEO_PLAYBACK
-  void ProcessOverlays(DVDVideoPicture* pSource, YV12Image* pDest, double pts);
+  void ProcessOverlays(DVDVideoPicture* pSource, double pts);
 #endif
   void ProcessVideoUserData(DVDVideoUserData* pVideoUserData, double pts);
+
+  CDVDMessageQueue m_messageQueue;
+  CDVDMessageQueue& m_messageParent;
 
   double m_iCurrentPts; // last pts displayed
   double m_iVideoDelay;
@@ -143,6 +146,8 @@ protected:
   int    m_iFrameRateLength; //how many seconds we should measure the framerate
                              //this is increased exponentially from CDVDPlayerVideo::CalcFrameRate()
 
+  bool   m_bFpsInvalid;      // needed to ignore fps (e.g. dvd stills)
+
   struct SOutputConfiguration
   {
     unsigned int width;
@@ -150,10 +155,13 @@ protected:
     unsigned int dwidth;
     unsigned int dheight;
     unsigned int color_format;
+    unsigned int extended_format;
     unsigned int color_matrix : 4;
     unsigned int color_range  : 1;
+    unsigned int chroma_position;
+    unsigned int color_primaries;
+    unsigned int color_transfer;
     double       framerate;
-    bool         inited;
   } m_output; //holds currently configured output
 
   bool m_bAllowFullscreen;

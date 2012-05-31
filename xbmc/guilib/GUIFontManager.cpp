@@ -73,6 +73,21 @@ void GUIFontManager::RescaleFontSizeAndAspect(float *size, float *aspect, const 
   *size /= g_graphicsContext.GetGUIScaleY();
 }
 
+static bool CheckFont(CStdString& strPath, const CStdString& newPath,
+                      const CStdString& filename)
+{
+  if (!XFILE::CFile::Exists(strPath))
+  {
+    strPath = URIUtils::AddFileToFolder(newPath,filename);
+#ifdef _LINUX
+    strPath = CSpecialProtocol::TranslatePathConvertCase(strPath);
+#endif
+    return false;
+  }
+
+  return true;
+}
+
 CGUIFont* GUIFontManager::LoadTTF(const CStdString& strFontName, const CStdString& strFilename, color_t textColor, color_t shadowColor, const int iSize, const int iStyle, bool border, float lineSpacing, float aspect, const RESOLUTION_INFO *sourceRes, bool preserveAspect)
 {
   float originalAspect = aspect;
@@ -99,17 +114,13 @@ CGUIFont* GUIFontManager::LoadTTF(const CStdString& strFontName, const CStdStrin
     strPath = strFilename;
 
 #ifdef _LINUX
-  strPath = PTH_IC(strPath);
+  strPath = CSpecialProtocol::TranslatePathConvertCase(strPath);
 #endif
 
   // Check if the file exists, otherwise try loading it from the global media dir
-  if (!XFILE::CFile::Exists(strPath))
-  {
-    strPath = URIUtils::AddFileToFolder("special://xbmc/media/Fonts", URIUtils::GetFileName(strFilename));
-#ifdef _LINUX
-    strPath = PTH_IC(strPath);
-#endif
-  }
+  CStdString file = URIUtils::GetFileName(strFilename);
+  if (!CheckFont(strPath,"special://home/media/Fonts",file))
+    CheckFont(strPath,"special://xbmc/media/Fonts",file);
 
   // check if we already have this font file loaded (font object could differ only by color or style)
   CStdString TTFfontName;
@@ -328,7 +339,7 @@ void GUIFontManager::Clear()
 
 void GUIFontManager::LoadFonts(const CStdString& strFontSet)
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   if (!OpenFontFile(xmlDoc))
     return;
 
@@ -443,7 +454,7 @@ void GUIFontManager::LoadFonts(const TiXmlNode* fontNode)
   }
 }
 
-bool GUIFontManager::OpenFontFile(TiXmlDocument& xmlDoc)
+bool GUIFontManager::OpenFontFile(CXBMCTinyXML& xmlDoc)
 {
   // Get the file to load fonts from:
   CStdString strPath = g_SkinInfo->GetSkinPath("Font.xml", &m_skinResolution);
@@ -472,7 +483,7 @@ bool GUIFontManager::GetFirstFontSetUnicode(CStdString& strFontSet)
   strFontSet.Empty();
 
   // Load our font file
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   if (!OpenFontFile(xmlDoc))
     return false;
 
@@ -506,7 +517,7 @@ bool GUIFontManager::GetFirstFontSetUnicode(CStdString& strFontSet)
 
     // If no fontset was loaded
     if (pChild == NULL)
-      CLog::Log(LOGWARNING, "file doesnt have <fontset> with with attibute unicode=\"true\"");
+      CLog::Log(LOGWARNING, "file doesnt have <fontset> with attribute unicode=\"true\"");
   }
   else
   {
@@ -518,7 +529,7 @@ bool GUIFontManager::GetFirstFontSetUnicode(CStdString& strFontSet)
 
 bool GUIFontManager::IsFontSetUnicode(const CStdString& strFontSet)
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   if (!OpenFontFile(xmlDoc))
     return false;
 

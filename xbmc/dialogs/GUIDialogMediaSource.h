@@ -22,7 +22,6 @@
  */
 
 #include "guilib/GUIDialog.h"
-#include "video/VideoInfoScanner.h"
 
 class CFileItemList;
 class CMediaSource;
@@ -34,7 +33,7 @@ public:
   CGUIDialogMediaSource(void);
   virtual ~CGUIDialogMediaSource(void);
   virtual bool OnMessage(CGUIMessage& message);
-  virtual bool OnAction(const CAction &action);
+  virtual bool OnBack(int actionID);
   virtual void OnWindowLoaded();
   static bool ShowAndAddMediaSource(const CStdString &type);
   static bool ShowAndEditMediaSource(const CStdString &type, const CMediaSource &share);
@@ -61,9 +60,5 @@ protected:
   CStdString m_name;
   CFileItemList* m_paths;
   bool m_confirmed;
-  ADDON::ScraperPtr m_info;
-  bool m_bRunScan;
   bool m_bNameChanged;
-
-  VIDEO::SScanSettings m_settings;
 };

@@ -21,6 +21,7 @@
 
 #include "LabelFormatter.h"
 #include "settings/GUISettings.h"
+#include "settings/AdvancedSettings.h"
 #include "RegExp.h"
 #include "Util.h"
 #include "video/VideoInfoTag.h"
@@ -94,9 +95,10 @@ using namespace MUSIC_INFO;
  *  %V - Playcount
  *  %X - Bitrate
  *  %W - Listeners
+ *  %a - Date Added
  */
 
-#define MASK_CHARS "NSATBGYFLDIJRCKMEPHZOQUVXW"
+#define MASK_CHARS "NSATBGYFLDIJRCKMEPHZOQUVXWa"
 
 CLabelFormatter::CLabelFormatter(const CStdString &mask, const CStdString &mask2)
 {
@@ -163,9 +165,9 @@ CStdString CLabelFormatter::GetMaskContent(const CMaskString &mask, const CFileI
     break;
   case 'A':
     if (music && music->GetArtist().size())
-      value = music->GetArtist();
-    if (movie && movie->m_strArtist.size())
-      value = movie->m_strArtist;
+      value = StringUtils::Join(music->GetArtist(), g_advancedSettings.m_musicItemSeparator);
+    if (movie && movie->m_artist.size())
+      value = StringUtils::Join(movie->m_artist, g_advancedSettings.m_videoItemSeparator);
     break;
   case 'T':
     if (music && music->GetTitle().size())
@@ -185,32 +187,32 @@ CStdString CLabelFormatter::GetMaskContent(const CMaskString &mask, const CFileI
     break;
   case 'G':
     if (music && music->GetGenre().size())
-      value = music->GetGenre();
-    if (movie && movie->m_strGenre.size())
-      value = movie->m_strGenre;
+      value = StringUtils::Join(music->GetGenre(), g_advancedSettings.m_musicItemSeparator);
+    if (movie && movie->m_genre.size())
+      value = StringUtils::Join(movie->m_genre, g_advancedSettings.m_videoItemSeparator);
     break;
   case 'Y':
     if (music)
       value = music->GetYearString();
     if (movie)
     {
-      if (!movie->m_strFirstAired.IsEmpty())
-        value = movie->m_strFirstAired;
-      else if (!movie->m_strPremiered.IsEmpty())
-        value = movie->m_strPremiered;
+      if (movie->m_firstAired.IsValid())
+        value = movie->m_firstAired.GetAsLocalizedDate();
+      else if (movie->m_premiered.IsValid())
+        value = movie->m_premiered.GetAsLocalizedDate();
       else if (movie->m_iYear > 0)
         value.Format("%i",movie->m_iYear);
     }
     break;
   case 'F': // filename
-    value = CUtil::GetTitleFromPath(item->m_strPath, item->m_bIsFolder && !item->IsFileFolder());
+    value = CUtil::GetTitleFromPath(item->GetPath(), item->m_bIsFolder && !item->IsFileFolder());
     break;
   case 'L':
     value = item->GetLabel();
     // is the label the actual file or folder name?
-    if (value == URIUtils::GetFileName(item->m_strPath))
+    if (value == URIUtils::GetFileName(item->GetPath()))
     { // label is the same as filename, clean it up as appropriate
-      value = CUtil::GetTitleFromPath(item->m_strPath, item->m_bIsFolder && !item->IsFileFolder());
+      value = CUtil::GetTitleFromPath(item->GetPath(), item->m_bIsFolder && !item->IsFileFolder());
     }
     break;
   case 'D':
@@ -288,9 +290,9 @@ CStdString CLabelFormatter::GetMaskContent(const CMaskString &mask, const CFileI
     }
     break;
   case 'U':
-    if (movie && movie->m_strStudio)
-    {// MPAA Rating
-      value = movie ->m_strStudio;
+    if (movie && movie->m_studio.size() > 0)
+    {// Studios
+      value = StringUtils::Join(movie ->m_studio, g_advancedSettings.m_videoItemSeparator);
     }
     break;
   case 'V': // Playcount
@@ -306,7 +308,11 @@ CStdString CLabelFormatter::GetMaskContent(const CMaskString &mask, const CFileI
    case 'W': // Listeners
     if( !item->m_bIsFolder && music && music->GetListeners() != 0 )
      value.Format("%i %s", music->GetListeners(), g_localizeStrings.Get(music->GetListeners() == 1 ? 20454 : 20455));
-    break;    
+    break;
+  case 'a': // Date Added
+    if (movie && movie->m_dateAdded.IsValid())
+      value = movie->m_dateAdded.GetAsLocalizedDate();
+    break;
   }
   if (!value.IsEmpty())
     return mask.m_prefix + value + mask.m_postfix;

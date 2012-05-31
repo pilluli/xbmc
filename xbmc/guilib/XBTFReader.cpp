@@ -25,8 +25,10 @@
 #include "utils/CharsetConverter.h"
 #ifdef _WIN32
 #include "FileSystem/SpecialProtocol.h"
-#include "PlatformDefs.h" //for PRIdS, PRId64
 #endif
+
+#include <string.h>
+#include "PlatformDefs.h"
 
 #define READ_STR(str, size, file) \
   if (!fread(str, size, 1, file)) \
@@ -58,7 +60,7 @@ bool CXBTFReader::Open(const CStdString& fileName)
 
 #ifdef _WIN32
   CStdStringW strPathW;
-  g_charsetConverter.utf8ToW(_P(m_fileName), strPathW, false);
+  g_charsetConverter.utf8ToW(CSpecialProtocol::TranslatePath(m_fileName), strPathW, false);
   m_file = _wfopen(strPathW.c_str(), L"rb");
 #else
   m_file = fopen(m_fileName.c_str(), "rb");

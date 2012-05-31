@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "GUILargeTextureManager.h"
 #include "pictures/Picture.h"
 #include "settings/GUISettings.h"
@@ -30,6 +31,7 @@
 #include "guilib/GraphicContext.h"
 #include "utils/log.h"
 #include "TextureCache.h"
+#include "TextureCacheJob.h"
 
 using namespace std;
 
@@ -47,27 +49,35 @@ CImageLoader::~CImageLoader()
 
 bool CImageLoader::DoWork()
 {
-  CFileItem file(m_path, false);
-  if (file.IsPicture() && !(file.IsZIP() || file.IsRAR() || file.IsCBR() || file.IsCBZ())) // ignore non-pictures
-  { // check for filename only (i.e. lookup in skin/media/)
-    CStdString loadPath = g_TextureManager.GetTexturePath(m_path);
+  bool needsChecking = false;
 
-    // cache the image if necessary
-    loadPath = CTextureCache::Get().CheckAndCacheImage(loadPath);
-    if (loadPath.IsEmpty())
-      return false;
+  CStdString texturePath = g_TextureManager.GetTexturePath(m_path);
+  CStdString loadPath = CTextureCache::Get().CheckCachedImage(texturePath, true, needsChecking); 
 
+  if (loadPath.IsEmpty())
+  {
+    // not in our texture cache, so try and load directly and then cache the result
+    loadPath = CTextureCache::Get().CacheImage(texturePath, &m_texture);
+    if (m_texture)
+      return true; // we're done
+  }
+  if (!loadPath.IsEmpty())
+  {
+    // direct route - load the image
     m_texture = new CTexture();
-    DWORD start = CTimeUtils::GetTimeMS();
-    if (!m_texture->LoadFromFile(loadPath, min(g_graphicsContext.GetWidth(), 2048), min(g_graphicsContext.GetHeight(), 1080), g_guiSettings.GetBool("pictures.useexifrotation")))
+    unsigned int start = XbmcThreads::SystemClockMillis();
+    if (!m_texture->LoadFromFile(loadPath, g_graphicsContext.GetWidth(), g_graphicsContext.GetHeight(), g_guiSettings.GetBool("pictures.useexifrotation")))
     {
       delete m_texture;
       m_texture = NULL;
+      return false;
     }
-    else if (CTimeUtils::GetTimeMS() - start > 100)
-      CLog::Log(LOGDEBUG, "%s - took %d ms to load %s", __FUNCTION__, CTimeUtils::GetTimeMS() - start, loadPath.c_str());
-  }
+    if (XbmcThreads::SystemClockMillis() - start > 100)
+      CLog::Log(LOGDEBUG, "%s - took %u ms to load %s", __FUNCTION__, XbmcThreads::SystemClockMillis() - start, loadPath.c_str());
 
+    if (needsChecking)
+      CTextureCache::Get().BackgroundCacheImage(texturePath);
+  }
   return true;
 }
 
@@ -148,7 +158,6 @@ void CGUILargeTextureManager::CleanupUnusedImages(bool immediately)
 // else, add to the queue list if appropriate.
 bool CGUILargeTextureManager::GetImage(const CStdString &path, CTextureArray &texture, bool firstRequest)
 {
-  // note: max size to load images: 2048x1024? (8MB)
   CSingleLock lock(m_listSection);
   for (listIterator it = m_allocated.begin(); it != m_allocated.end(); ++it)
   {
@@ -181,6 +190,12 @@ void CGUILargeTextureManager::ReleaseImage(const CStdString &path, bool immediat
       return;
     }
   }
+  assert(false);
+}
+
+void CGUILargeTextureManager::ReleaseQueuedImage(const CStdString &path)
+{
+  CSingleLock lock(m_listSection);
   for (queueIterator it = m_queued.begin(); it != m_queued.end(); ++it)
   {
     unsigned int id = it->first;

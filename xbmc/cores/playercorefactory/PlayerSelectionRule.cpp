@@ -26,7 +26,7 @@
 #include "settings/GUISettings.h"
 #include "utils/log.h"
 #include "utils/RegExp.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 
 CPlayerSelectionRule::CPlayerSelectionRule(TiXmlElement* pRule)
 {
@@ -48,6 +48,7 @@ void CPlayerSelectionRule::Initialize(TiXmlElement* pRule)
   m_tAudio = GetTristate(pRule->Attribute("audio"));
   m_tVideo = GetTristate(pRule->Attribute("video"));
 
+  m_tBD = GetTristate(pRule->Attribute("bd"));
   m_tDVD = GetTristate(pRule->Attribute("dvd"));
   m_tDVDFile = GetTristate(pRule->Attribute("dvdfile"));
   m_tDVDImage = GetTristate(pRule->Attribute("dvdimage"));
@@ -111,6 +112,7 @@ void CPlayerSelectionRule::GetPlayers(const CFileItem& item, VECPLAYERCORES &vec
   if (m_tVideo >= 0 && (m_tVideo > 0) != item.IsVideo()) return;
   if (m_tInternetStream >= 0 && (m_tInternetStream > 0) != item.IsInternetStream()) return;
 
+  if (m_tBD >= 0 && (m_tBD > 0) != (item.IsBDFile() && item.IsOnDVD())) return;
   if (m_tDVD >= 0 && (m_tDVD > 0) != item.IsDVD()) return;
   if (m_tDVDFile >= 0 && (m_tDVDFile > 0) != item.IsDVDFile()) return;
   if (m_tDVDImage >= 0 && (m_tDVDImage > 0) != item.IsDVDImage()) return;
@@ -138,7 +140,7 @@ void CPlayerSelectionRule::GetPlayers(const CFileItem& item, VECPLAYERCORES &vec
         !MatchesRegExp(CStreamDetails::VideoAspectToAspectDescription(streamDetails.GetVideoAspect()),  regExp)) return;
   }
 
-  CURL url(item.m_strPath);
+  CURL url(item.GetPath());
 
   if (CompileRegExp(m_fileTypes, regExp) && !MatchesRegExp(url.GetFileType(), regExp)) return;
 
@@ -146,7 +148,7 @@ void CPlayerSelectionRule::GetPlayers(const CFileItem& item, VECPLAYERCORES &vec
 
   if (CompileRegExp(m_mimeTypes, regExp) && !MatchesRegExp(item.GetMimeType(), regExp)) return;
 
-  if (CompileRegExp(m_fileName, regExp) && !MatchesRegExp(item.m_strPath, regExp)) return;
+  if (CompileRegExp(m_fileName, regExp) && !MatchesRegExp(item.GetPath(), regExp)) return;
 
   CLog::Log(LOGDEBUG, "CPlayerSelectionRule::GetPlayers: matches rule: %s", m_name.c_str());
 

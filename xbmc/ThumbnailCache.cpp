@@ -23,8 +23,22 @@
 #include "filesystem/File.h"
 #include "threads/SingleLock.h"
 
+#include "FileItem.h"
+#include "video/VideoInfoTag.h"
+#include "video/VideoDatabase.h"
+#include "music/tags/MusicInfoTag.h"
+#include "music/Album.h"
+#include "music/Artist.h"
+#include "settings/Settings.h"
+#include "utils/URIUtils.h"
+#include "utils/Crc32.h"
+#include "utils/StringUtils.h"
+#include "filesystem/StackDirectory.h"
+#include "settings/AdvancedSettings.h"
+
 using namespace std;
 using namespace XFILE;
+using namespace MUSIC_INFO;
 
 CThumbnailCache* CThumbnailCache::m_pCacheInstance = NULL;
 
@@ -96,4 +110,115 @@ void CThumbnailCache::Add(const CStdString& strFileName, bool bExists)
     it->second = bExists;
   else
     m_Cache.insert(pair<CStdString, bool>(strFileName, bExists));
+}
+
+CStdString CThumbnailCache::GetAlbumThumb(const CFileItem &item)
+{
+  return GetAlbumThumb(item.GetMusicInfoTag());
+}
+
+CStdString CThumbnailCache::GetAlbumThumb(const CMusicInfoTag *musicInfo)
+{
+  if (!musicInfo)
+    return CStdString();
+
+  return GetAlbumThumb(musicInfo->GetAlbum(), StringUtils::Join(!musicInfo->GetAlbumArtist().empty() ? musicInfo->GetAlbumArtist() : musicInfo->GetArtist(), g_advancedSettings.m_musicItemSeparator));
+}
+
+CStdString CThumbnailCache::GetAlbumThumb(const CAlbum &album)
+{
+  return GetAlbumThumb(album.strAlbum, StringUtils::Join(album.artist, g_advancedSettings.m_musicItemSeparator));
+}
+
+CStdString CThumbnailCache::GetAlbumThumb(const CStdString& album, const CStdString& artist)
+{
+  if (album.IsEmpty())
+    return GetMusicThumb("unknown" + artist);
+  if (artist.IsEmpty())
+    return GetMusicThumb(album + "unknown");
+  return GetMusicThumb(album + artist);
+}
+
+CStdString CThumbnailCache::GetArtistThumb(const CFileItem &item)
+{
+  return GetArtistThumb(item.GetLabel());
+}
+
+CStdString CThumbnailCache::GetArtistThumb(const CArtist &artist)
+{
+  return GetArtistThumb(artist.strArtist);
+}
+
+CStdString CThumbnailCache::GetArtistThumb(const CStdString &label)
+{
+  return GetThumb("artist" + label, g_settings.GetMusicArtistThumbFolder());
+}
+
+CStdString CThumbnailCache::GetFanart(const CFileItem &item)
+{
+  // get the locally cached thumb
+  if (item.IsVideoDb() || (item.HasVideoInfoTag() && !item.GetVideoInfoTag()->IsEmpty()))
+  {
+    if (!item.HasVideoInfoTag())
+      return "";
+    if (!item.GetVideoInfoTag()->m_artist.empty())
+      return GetThumb(StringUtils::Join(item.GetVideoInfoTag()->m_artist, g_advancedSettings.m_videoItemSeparator),g_settings.GetMusicFanartFolder());
+    if (!item.m_bIsFolder && !item.GetVideoInfoTag()->m_strShowTitle.IsEmpty())
+    {
+      CStdString showPath;
+      if (!item.GetVideoInfoTag()->m_strShowPath.IsEmpty())
+        showPath = item.GetVideoInfoTag()->m_strShowPath;
+      else
+      {
+        CVideoDatabase database;
+        database.Open();
+        int iShowId = item.GetVideoInfoTag()->m_iIdShow;
+        if (iShowId <= 0)
+          iShowId = database.GetTvShowId(item.GetVideoInfoTag()->m_strPath);
+        CStdString showPath;
+        database.GetFilePathById(iShowId,showPath,VIDEODB_CONTENT_TVSHOWS);
+      }
+      return GetThumb(showPath,g_settings.GetVideoFanartFolder());
+    }
+    CStdString path = item.GetVideoInfoTag()->GetPath();
+    if (path.empty())
+      return "";
+    return GetThumb(path,g_settings.GetVideoFanartFolder());
+  }
+  if (item.HasMusicInfoTag())
+    return GetThumb(StringUtils::Join(item.GetMusicInfoTag()->GetArtist(), g_advancedSettings.m_musicItemSeparator),g_settings.GetMusicFanartFolder());
+
+  return GetThumb(item.GetPath(),g_settings.GetVideoFanartFolder());
+}
+
+CStdString CThumbnailCache::GetThumb(const CStdString &path, const CStdString &path2, bool split /* = false */)
+{
+  // get the locally cached thumb
+  Crc32 crc;
+  crc.ComputeFromLowerCase(path);
+
+  CStdString thumb;
+  if (split)
+  {
+    CStdString hex;
+    hex.Format("%08x", (__int32)crc);
+    thumb.Format("%c\\%08x.tbn", hex[0], (unsigned __int32)crc);
+  }
+  else
+    thumb.Format("%08x.tbn", (unsigned __int32)crc);
+
+  return URIUtils::AddFileToFolder(path2, thumb);
+}
+
+CStdString CThumbnailCache::GetMusicThumb(const CStdString& path)
+{
+  Crc32 crc;
+  CStdString noSlashPath(path);
+  URIUtils::RemoveSlashAtEnd(noSlashPath);
+  crc.ComputeFromLowerCase(noSlashPath);
+  CStdString hex;
+  hex.Format("%08x", (unsigned __int32) crc);
+  CStdString thumb;
+  thumb.Format("%c/%s.tbn", hex[0], hex.c_str());
+  return URIUtils::AddFileToFolder(g_settings.GetMusicThumbFolder(), thumb);
 }

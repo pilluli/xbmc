@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "LastFmManager.h"
 #include "Album.h"
 #include "Artist.h"
@@ -28,12 +29,13 @@
 #include "pictures/Picture.h"
 #include "utils/md5.h"
 #include "filesystem/File.h"
-#include "filesystem/FileCurl.h"
+#include "filesystem/CurlFile.h"
 #include "GUIInfoManager.h"
 #include "MusicDatabase.h"
 #include "music/tags/MusicInfoTag.h"
 #include "URL.h"
 #include "guilib/GUIWindowManager.h"
+#include "dialogs/GUIDialogKaiToast.h"
 #include "dialogs/GUIDialogProgress.h"
 #include "dialogs/GUIDialogYesNo.h"
 #include "dialogs/GUIDialogOK.h"
@@ -45,7 +47,7 @@
 #include "settings/Settings.h"
 #include "utils/StringUtils.h"
 #include "guilib/LocalizeStrings.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "utils/TimeUtils.h"
 #include "threads/SingleLock.h"
 #include "utils/log.h"
@@ -68,16 +70,14 @@ using namespace XFILE;
 
 CLastFmManager* CLastFmManager::m_pInstance=NULL;
 
-CLastFmManager::CLastFmManager()
+CLastFmManager::CLastFmManager() : CThread("CLastFmManager")
 {
-  m_hWorkerEvent = CreateEvent(NULL, false, false, NULL);
   m_RadioTrackQueue = new CPlayList;
 }
 
 CLastFmManager::~CLastFmManager()
 {
   StopRadio(true);
-  CloseHandle(m_hWorkerEvent);
   StopThread();
   CLog::Log(LOGINFO,"lastfm destroyed");
   delete m_RadioTrackQueue;
@@ -130,7 +130,7 @@ bool CLastFmManager::RadioHandShake()
 
   m_RadioSession = "";
 
-  CFileCurl http;
+  CCurlFile http;
   CStdString html;
 
   CStdString strPassword = g_guiSettings.GetString("scrobbler.lastfmpass");
@@ -207,7 +207,7 @@ void CLastFmManager::CloseProgressDialog()
 
 bool CLastFmManager::ChangeStation(const CURL& stationUrl)
 {
-  unsigned int start = CTimeUtils::GetTimeMS();
+  unsigned int start = XbmcThreads::SystemClockMillis();
 
   InitProgressDialog(stationUrl.Get());
 
@@ -221,7 +221,7 @@ bool CLastFmManager::ChangeStation(const CURL& stationUrl)
 
   UpdateProgressDialog(15252); // Selecting station...
 
-  CFileCurl http;
+  CCurlFile http;
   CStdString url;
   CStdString html;
 
@@ -250,7 +250,7 @@ bool CLastFmManager::ChangeStation(const CURL& stationUrl)
   CacheTrackThumb(XBMC_LASTFM_MINTRACKS);
   AddToPlaylist(XBMC_LASTFM_MINTRACKS);
   Create(); //start thread
-  SetEvent(m_hWorkerEvent); //kickstart the thread
+  m_hWorkerEvent.Set(); //kickstart the thread
 
   CSingleLock lock(m_lockPlaylist);
   CPlayList& playlist = g_playlistPlayer.GetPlaylist(PLAYLIST_MUSIC);
@@ -259,7 +259,7 @@ bool CLastFmManager::ChangeStation(const CURL& stationUrl)
     g_application.m_strPlayListFile = stationUrl.Get(); //needed to highlight the playing item
     g_playlistPlayer.SetCurrentPlaylist(PLAYLIST_MUSIC);
     g_playlistPlayer.Play(0);
-    CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(CTimeUtils::GetTimeMS() - start));
+    CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(XbmcThreads::SystemClockMillis() - start));
     CloseProgressDialog();
     return true;
   }
@@ -269,12 +269,12 @@ bool CLastFmManager::ChangeStation(const CURL& stationUrl)
 
 bool CLastFmManager::RequestRadioTracks()
 {
-  unsigned int start = CTimeUtils::GetTimeMS();
+  unsigned int start = XbmcThreads::SystemClockMillis();
   CStdString url;
   CStdString html;
   url.Format("http://" + m_RadioBaseUrl + m_RadioBasePath + "/xspf.php?sk=%s&discovery=0&desktop=", m_RadioSession);
   {
-    CFileCurl http;
+    CCurlFile http;
     if (!http.Get(url, html))
     {
       m_RadioSession.empty();
@@ -285,7 +285,7 @@ bool CLastFmManager::RequestRadioTracks()
   //CLog::Log(LOGDEBUG, "RequestRadioTracks: %s", html.c_str());
 
   //parse playlist
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
 
   xmlDoc.Parse(html);
   if (xmlDoc.Error())
@@ -331,7 +331,7 @@ bool CLastFmManager::RequestRadioTracks()
       {
         CStdString url = child->Value();
         url.Replace("http:", "lastfm:");
-        newItem->m_strPath = url;
+        newItem->SetPath(url);
       }
     }
     pElement = pTrackElement->FirstChildElement("title");
@@ -409,16 +409,16 @@ bool CLastFmManager::RequestRadioTracks()
   //end parse
   CSingleLock lock(m_lockCache);
   int iNrCachedTracks = m_RadioTrackQueue->size();
-  CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(CTimeUtils::GetTimeMS() - start));
+  CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(XbmcThreads::SystemClockMillis() - start));
   return iNrCachedTracks > 0;
 }
 
 void CLastFmManager::CacheTrackThumb(const int nrInitialTracksToAdd)
 {
-  unsigned int start = CTimeUtils::GetTimeMS();
+  unsigned int start = XbmcThreads::SystemClockMillis();
   CSingleLock lock(m_lockCache);
   int iNrCachedTracks = m_RadioTrackQueue->size();
-  CFileCurl http;
+  CCurlFile http;
   for (int i = 0; i < nrInitialTracksToAdd && i < iNrCachedTracks; i++)
   {
     CFileItemPtr item = (*m_RadioTrackQueue)[i];
@@ -460,7 +460,7 @@ void CLastFmManager::CacheTrackThumb(const int nrInitialTracksToAdd)
       item->GetMusicInfoTag()->SetLoaded();
     }
   }
-  CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(CTimeUtils::GetTimeMS() - start));
+  CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(XbmcThreads::SystemClockMillis() - start));
 }
 
 void CLastFmManager::AddToPlaylist(const int nrTracks)
@@ -501,13 +501,13 @@ void CLastFmManager::OnSongChange(CFileItem& newSong)
     }
     else
     {
-      unsigned int start = CTimeUtils::GetTimeMS();
+      unsigned int start = XbmcThreads::SystemClockMillis();
       ReapSongs();
       MovePlaying();
       Update();
       SendUpdateMessage();
 
-      CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(CTimeUtils::GetTimeMS() - start));
+      CLog::Log(LOGDEBUG, "%s: Done (time: %i ms)", __FUNCTION__, (int)(XbmcThreads::SystemClockMillis() - start));
     }
   }
   m_CurrentSong.IsLoved = false;
@@ -534,9 +534,9 @@ void CLastFmManager::Update()
     if (iNrCachedTracks == 0)
     {
       //get more tracks
-      if (ThreadHandle() != NULL)
+      if (IsRunning())
       {
-        SetEvent(m_hWorkerEvent);
+        m_hWorkerEvent.Set();
       }
     }
   }
@@ -608,7 +608,7 @@ void CLastFmManager::Process()
 
   while (!m_bStop)
   {
-    WaitForSingleObject(m_hWorkerEvent, INFINITE);
+    AbortableWait(m_hWorkerEvent);
     if (m_bStop)
       break;
     int iNrCachedTracks = m_RadioTrackQueue->size();
@@ -633,10 +633,10 @@ void CLastFmManager::StopRadio(bool bKillSession /*= true*/)
   {
     m_RadioSession = "";
   }
-  if (m_ThreadHandle)
+  if (IsRunning())
   {
     m_bStop = true;
-    SetEvent(m_hWorkerEvent);
+    m_hWorkerEvent.Set();
     StopThread();
   }
   m_CurrentSong.CurrentSong = NULL;
@@ -712,7 +712,7 @@ bool CLastFmManager::CallXmlRpc(const CStdString& action, const CStdString& arti
   CreateMD5Hash(strAuth, strAuth);
 
   //create request xml
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
   TiXmlDeclaration * decl = new TiXmlDeclaration( "1.0", "UTF-8", "" );
   doc.LinkEndChild( decl );
 
@@ -775,7 +775,7 @@ bool CLastFmManager::CallXmlRpc(const CStdString& action, const CStdString& arti
   CStdString strBody;
   strBody << doc;
 
-  CFileCurl http;
+  CCurlFile http;
   CStdString html;
   CStdString url = "http://ws.audioscrobbler.com/1.0/rw/xmlrpc.php";
   http.SetMimeType("text/xml");
@@ -801,7 +801,7 @@ bool CLastFmManager::Love(bool askConfirmation)
     if (infoTag)
     {
       CStdString strTitle = infoTag->GetTitle();
-      CStdString strArtist = infoTag->GetArtist();
+      CStdString strArtist = StringUtils::Join(infoTag->GetArtist(), g_advancedSettings.m_musicItemSeparator);
 
       CStdString strInfo;
       strInfo.Format("%s - %s", strArtist, strTitle);
@@ -811,13 +811,13 @@ bool CLastFmManager::Love(bool askConfirmation)
         if (Love(*infoTag))
         {
           strMessage.Format(g_localizeStrings.Get(15289), strTitle);
-          g_application.m_guiDialogKaiToast.QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(15200), strMessage, 7000, false);
+          CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(15200), strMessage, 7000, false);
           return true;
         }
         else
         {
           strMessage.Format(g_localizeStrings.Get(15290), strTitle);
-          g_application.m_guiDialogKaiToast.QueueNotification(CGUIDialogKaiToast::Error, g_localizeStrings.Get(15200), strMessage, 7000, false);
+          CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, g_localizeStrings.Get(15200), strMessage, 7000, false);
           return false;
         }
       }
@@ -834,7 +834,7 @@ bool CLastFmManager::Ban(bool askConfirmation)
     if (infoTag)
     {
       CStdString strTitle = infoTag->GetTitle();
-      CStdString strArtist = infoTag->GetArtist();
+      CStdString strArtist = StringUtils::Join(infoTag->GetArtist(), g_advancedSettings.m_musicItemSeparator);
 
       CStdString strInfo;
       strInfo.Format("%s - %s", strArtist, strTitle);
@@ -844,13 +844,13 @@ bool CLastFmManager::Ban(bool askConfirmation)
         if (Ban(*infoTag))
         {
           strMessage.Format(g_localizeStrings.Get(15291), strTitle);
-          g_application.m_guiDialogKaiToast.QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(15200), strMessage, 7000, false);
+          CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(15200), strMessage, 7000, false);
           return true;
         }
         else
         {
           strMessage.Format(g_localizeStrings.Get(15292), strTitle);
-          g_application.m_guiDialogKaiToast.QueueNotification(CGUIDialogKaiToast::Warning, g_localizeStrings.Get(15200), strMessage, 7000, false);
+          CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Warning, g_localizeStrings.Get(15200), strMessage, 7000, false);
           return false;
         }
       }
@@ -868,13 +868,13 @@ bool CLastFmManager::Love(const CMusicInfoTag& musicinfotag)
   }
 
   CStdString strTitle = musicinfotag.GetTitle();
-  CStdString strArtist = musicinfotag.GetArtist();
+  CStdString strArtist = StringUtils::Join(musicinfotag.GetArtist(), g_advancedSettings.m_musicItemSeparator);
 
   CStdString strFilePath;
   if (m_CurrentSong.CurrentSong && !m_CurrentSong.CurrentSong->IsLastFM())
   {
     //path to update the rating for
-    strFilePath = m_CurrentSong.CurrentSong->m_strPath;
+    strFilePath = m_CurrentSong.CurrentSong->GetPath();
   }
   if (CallXmlRpc("loveTrack",strArtist, strTitle))
   {
@@ -908,7 +908,7 @@ bool CLastFmManager::Ban(const CMusicInfoTag& musicinfotag)
     return false;
   }
 
-  if (CallXmlRpc("banTrack", musicinfotag.GetArtist(), musicinfotag.GetTitle()))
+  if (CallXmlRpc("banTrack", StringUtils::Join(musicinfotag.GetArtist(), g_advancedSettings.m_musicItemSeparator), musicinfotag.GetTitle()))
   {
     //we banned this track so skip to the next track
     g_application.getApplicationMessenger().ExecBuiltIn("playercontrol(next)");
@@ -927,7 +927,7 @@ bool CLastFmManager::Unlove(const CMusicInfoTag& musicinfotag, bool askConfirmat
   }
 
   CStdString strTitle = musicinfotag.GetTitle();
-  CStdString strArtist = musicinfotag.GetArtist();
+  CStdString strArtist = StringUtils::Join(musicinfotag.GetArtist(), g_advancedSettings.m_musicItemSeparator);
 
   if (strArtist.IsEmpty())
   {
@@ -982,7 +982,7 @@ bool CLastFmManager::Unban(const CMusicInfoTag& musicinfotag, bool askConfirmati
   }
 
   CStdString strTitle = musicinfotag.GetTitle();
-  CStdString strArtist = musicinfotag.GetArtist();
+  CStdString strArtist = StringUtils::Join(musicinfotag.GetArtist(), g_advancedSettings.m_musicItemSeparator);
 
   if (strArtist.IsEmpty())
   {
@@ -1022,7 +1022,7 @@ bool CLastFmManager::CanLove()
     (
       m_CurrentSong.CurrentSong->HasMusicInfoTag() &&
       m_CurrentSong.CurrentSong->GetMusicInfoTag()->Loaded() &&
-      !m_CurrentSong.CurrentSong->GetMusicInfoTag()->GetArtist().IsEmpty() &&
+      !m_CurrentSong.CurrentSong->GetMusicInfoTag()->GetArtist().empty() &&
       !m_CurrentSong.CurrentSong->GetMusicInfoTag()->GetTitle().IsEmpty()
     ))
   );

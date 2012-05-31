@@ -1,3 +1,24 @@
+/*
+ *      Copyright (C) 2005-2012 Team XBMC
+ *      http://www.xbmc.org
+ *
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2, or (at your option)
+ *  any later version.
+ *
+ *  This Program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with XBMC; see the file COPYING.  If not, write to
+ *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  http://www.gnu.org/copyleft/gpl.html
+ *
+ */
+
 #include "TCPServer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +32,7 @@
 #include "utils/log.h"
 #include "utils/Variant.h"
 #include "threads/SingleLock.h"
+#include "websocket/WebSocketManager.h"
 
 static const char     bt_service_name[] = "XBMC JSON-RPC";
 static const char     bt_service_desc[] = "Interface for XBMC remote control over bluetooth";
@@ -64,7 +86,7 @@ void CTCPServer::StopServer(bool bWait)
   }
 }
 
-CTCPServer::CTCPServer(int port, bool nonlocal)
+CTCPServer::CTCPServer(int port, bool nonlocal) : CThread("CTCPServer")
 {
   m_port = port;
   m_nonlocal = nonlocal;
@@ -91,9 +113,9 @@ void CTCPServer::Process()
 
     for (unsigned int i = 0; i < m_connections.size(); i++)
     {
-      FD_SET(m_connections[i].m_socket, &rfds);
-      if ((intptr_t)m_connections[i].m_socket > (intptr_t)max_fd)
-        max_fd = m_connections[i].m_socket;
+      FD_SET(m_connections[i]->m_socket, &rfds);
+      if ((intptr_t)m_connections[i]->m_socket > (intptr_t)max_fd)
+        max_fd = m_connections[i]->m_socket;
     }
 
     int res = select((intptr_t)max_fd+1, &rfds, NULL, NULL, &to);
@@ -107,7 +129,7 @@ void CTCPServer::Process()
     {
       for (int i = m_connections.size() - 1; i >= 0; i--)
       {
-        int socket = m_connections[i].m_socket;
+        int socket = m_connections[i]->m_socket;
         if (FD_ISSET(socket, &rfds))
         {
           char buffer[RECEIVEBUFFER] = {};
@@ -115,12 +137,33 @@ void CTCPServer::Process()
           nread = recv(socket, (char*)&buffer, RECEIVEBUFFER, 0);
           if (nread > 0)
           {
-            m_connections[i].PushBuffer(this, buffer, nread);
+            std::string response;
+            if (m_connections[i]->IsNew())
+            {
+              CWebSocket *websocket = CWebSocketManager::Handle(buffer, nread, response);
+
+              if (response.size() > 0)
+                m_connections[i]->Send(response.c_str(), response.size());
+
+              if (websocket != NULL)
+              {
+                // Replace the CTCPClient with a CWebSocketClient
+                CWebSocketClient *websocketClient = new CWebSocketClient(websocket, *(m_connections[i]));
+                delete m_connections[i];
+                m_connections.erase(m_connections.begin() + i);
+                m_connections.insert(m_connections.begin() + i, websocketClient);
+              }
+            }
+
+            if (response.size() <= 0)
+              m_connections[i]->PushBuffer(this, buffer, nread);
+
           }
           if (nread <= 0)
           {
             CLog::Log(LOGINFO, "JSONRPC Server: Disconnection detected");
-            m_connections[i].Disconnect();
+            m_connections[i]->Disconnect();
+            delete m_connections[i];
             m_connections.erase(m_connections.begin() + i);
           }
         }
@@ -131,10 +174,10 @@ void CTCPServer::Process()
         if (FD_ISSET(*it, &rfds))
         {
           CLog::Log(LOGDEBUG, "JSONRPC Server: New connection detected");
-          CTCPClient newconnection;
-          newconnection.m_socket = accept(*it, (sockaddr*)&newconnection.m_cliaddr, &newconnection.m_addrlen);
+          CTCPClient *newconnection = new CTCPClient();
+          newconnection->m_socket = accept(*it, (sockaddr*)&newconnection->m_cliaddr, &newconnection->m_addrlen);
 
-          if (newconnection.m_socket == INVALID_SOCKET)
+          if (newconnection->m_socket == INVALID_SOCKET)
             CLog::Log(LOGERROR, "JSONRPC Server: Accept of new connection failed");
           else
           {
@@ -149,6 +192,11 @@ void CTCPServer::Process()
   Deinitialize();
 }
 
+bool CTCPServer::PrepareDownload(const char *path, CVariant &details, std::string &protocol)
+{
+  return false;
+}
+
 bool CTCPServer::Download(const char *path, CVariant &result)
 {
   return false;
@@ -159,24 +207,19 @@ int CTCPServer::GetCapabilities()
   return Response | Announcing;
 }
 
-void CTCPServer::Announce(EAnnouncementFlag flag, const char *sender, const char *message, const CVariant &data)
+void CTCPServer::Announce(AnnouncementFlag flag, const char *sender, const char *message, const CVariant &data)
 {
-  std::string str = AnnouncementToJSON(flag, sender, message, data, g_advancedSettings.m_jsonOutputCompact);
+  std::string str = IJSONRPCAnnouncer::AnnouncementToJSONRPC(flag, sender, message, data, g_advancedSettings.m_jsonOutputCompact);
 
   for (unsigned int i = 0; i < m_connections.size(); i++)
   {
     {
-      CSingleLock lock (m_connections[i].m_critSection);
-      if ((m_connections[i].GetAnnouncementFlags() & flag) == 0)
+      CSingleLock lock (m_connections[i]->m_critSection);
+      if ((m_connections[i]->GetAnnouncementFlags() & flag) == 0)
         continue;
     }
 
-    unsigned int sent = 0;
-    do
-    {
-      CSingleLock lock (m_connections[i].m_critSection);
-      sent += send(m_connections[i].m_socket, str.c_str(), str.size() - sent, sent);
-    } while (sent < str.size());
+    m_connections[i]->Send(str.c_str(), str.size());
   }
 }
 
@@ -421,7 +464,10 @@ bool CTCPServer::InitializeTCP()
 void CTCPServer::Deinitialize()
 {
   for (unsigned int i = 0; i < m_connections.size(); i++)
-    m_connections[i].Disconnect();
+  {
+    m_connections[i]->Disconnect();
+    delete m_connections[i];
+  }
 
   m_connections.clear();
 
@@ -441,6 +487,7 @@ void CTCPServer::Deinitialize()
 
 CTCPServer::CTCPClient::CTCPClient()
 {
+  m_new = true;
   m_announcementflags = ANNOUNCE_ALL;
   m_socket = INVALID_SOCKET;
   m_beginBrackets = 0;
@@ -478,8 +525,20 @@ bool CTCPServer::CTCPClient::SetAnnouncementFlags(int flags)
   return true;
 }
 
+void CTCPServer::CTCPClient::Send(const char *data, unsigned int size)
+{
+  unsigned int sent = 0;
+  do
+  {
+    CSingleLock lock (m_critSection);
+    sent += send(m_socket, data, size - sent, 0);
+  } while (sent < size);
+}
+
 void CTCPServer::CTCPClient::PushBuffer(CTCPServer *host, const char *buffer, int length)
 {
+  m_new = false;
+
   for (int i = 0; i < length; i++)
   {
     char c = buffer[i];
@@ -505,8 +564,7 @@ void CTCPServer::CTCPClient::PushBuffer(CTCPServer *host, const char *buffer, in
       if (m_beginBrackets > 0 && m_endBrackets > 0 && m_beginBrackets == m_endBrackets)
       {
         std::string line = CJSONRPC::MethodCall(m_buffer, host, this);
-        CSingleLock lock (m_critSection);
-        send(m_socket, line.c_str(), line.size(), 0);
+        Send(line.c_str(), line.size());
         m_beginChar = m_beginBrackets = m_endBrackets = 0;
         m_buffer.clear();
       }
@@ -527,6 +585,7 @@ void CTCPServer::CTCPClient::Disconnect()
 
 void CTCPServer::CTCPClient::Copy(const CTCPClient& client)
 {
+  m_new               = client.m_new;
   m_socket            = client.m_socket;
   m_cliaddr           = client.m_cliaddr;
   m_addrlen           = client.m_addrlen;
@@ -536,5 +595,90 @@ void CTCPServer::CTCPClient::Copy(const CTCPClient& client)
   m_beginChar         = client.m_beginChar;
   m_endChar           = client.m_endChar;
   m_buffer            = client.m_buffer;
+}
+
+CTCPServer::CWebSocketClient::CWebSocketClient(CWebSocket *websocket)
+{
+  m_websocket = websocket;
+}
+
+CTCPServer::CWebSocketClient::CWebSocketClient(const CWebSocketClient& client)
+{
+  Copy(client);
+
+  m_websocket = client.m_websocket; // TODO
+}
+
+CTCPServer::CWebSocketClient::CWebSocketClient(CWebSocket *websocket, const CTCPClient& client)
+{
+  Copy(client);
+
+  m_websocket = websocket;
+}
+
+CTCPServer::CWebSocketClient::~CWebSocketClient()
+{
+  delete m_websocket;
+}
+
+CTCPServer::CWebSocketClient& CTCPServer::CWebSocketClient::operator=(const CWebSocketClient& client)
+{
+  Copy(client);
+
+  m_websocket = client.m_websocket; // TODO
+
+  return *this;
+}
+
+void CTCPServer::CWebSocketClient::Send(const char *data, unsigned int size)
+{
+  const CWebSocketMessage *msg = m_websocket->Send(WebSocketTextFrame, data, size);
+  if (msg == NULL || !msg->IsComplete())
+    return;
+
+  std::vector<const CWebSocketFrame *> frames = msg->GetFrames();
+  for (unsigned int index = 0; index < frames.size(); index++)
+    CTCPClient::Send(frames.at(index)->GetFrameData(), (unsigned int)frames.at(index)->GetFrameLength());
+}
+
+void CTCPServer::CWebSocketClient::PushBuffer(CTCPServer *host, const char *buffer, int length)
+{
+  bool send;
+  const CWebSocketMessage *msg;
+  if ((msg = m_websocket->Handle(buffer, length, send)) != NULL && msg->IsComplete())
+  {
+    std::vector<const CWebSocketFrame *> frames = msg->GetFrames();
+    if (send)
+    {
+      for (unsigned int index = 0; index < frames.size(); index++)
+        Send(frames.at(index)->GetFrameData(), (unsigned int)frames.at(index)->GetFrameLength());
+    }
+    else
+    {
+      for (unsigned int index = 0; index < frames.size(); index++)
+        CTCPClient::PushBuffer(host, frames.at(index)->GetApplicationData(), (int)frames.at(index)->GetLength());
+    }
+
+    if (m_websocket->GetState() == WebSocketStateClosed)
+      Disconnect();
+
+    delete msg;
+  }
+}
+
+void CTCPServer::CWebSocketClient::Disconnect()
+{
+  if (m_socket > 0)
+  {
+    if (m_websocket->GetState() != WebSocketStateClosed && m_websocket->GetState() != WebSocketStateNotConnected)
+    {
+      const CWebSocketFrame *closeFrame = m_websocket->Close();
+      if (closeFrame)
+        Send(closeFrame->GetFrameData(), (unsigned int)closeFrame->GetFrameLength());
+    }
+
+    if (m_websocket->GetState() == WebSocketStateClosed)
+      CTCPClient::Disconnect();
+  }
 }
 

@@ -30,9 +30,12 @@
 #include "utils/Variant.h"
 #include "video/VideoInfoTag.h"
 #include "music/tags/MusicInfoTag.h"
+#include "pictures/PictureInfoTag.h"
 #include "video/VideoDatabase.h"
 #include "filesystem/Directory.h"
 #include "filesystem/File.h"
+#include "TextureCache.h"
+#include "ThumbLoader.h"
 
 using namespace MUSIC_INFO;
 using namespace JSONRPC;
@@ -46,43 +49,128 @@ void CFileItemHandler::FillDetails(ISerializable* info, CFileItemPtr item, const
   CVariant serialization;
   info->Serialize(serialization);
 
+  bool fetchedArt = false;
+
   for (unsigned int i = 0; i < fields.size(); i++)
   {
     CStdString field = fields[i].asString();
 
     if (item)
     {
-      if (item->IsAlbum() && item->HasProperty("album_" + field))
+      if (item->IsAlbum() && field.Equals("albumlabel"))
+        field = "label";
+      if (item->IsAlbum())
       {
-        if (field == "rating")
-          result[field] = item->GetPropertyInt("album_rating");
-        else if (field == "label")
-          result["album_label"] = item->GetProperty("album_label");
-        else
+        if (field == "label")
+        {
+          result["albumlabel"] = item->GetProperty("album_label");
+          continue;
+        }
+        /* This would break backwards compatibility to JSON-RPC API v4
+        if (item->HasProperty("album_" + field + "_array"))
+        {
+          result[field] = item->GetProperty("album_" + field + "_array");
+          continue;
+        }*/
+        if (item->HasProperty("album_" + field))
+        {
           result[field] = item->GetProperty("album_" + field);
-
-        continue;
+          continue;
+        }
       }
 
+      /* This would break backwards compatibility to JSON-RPC API v4
+      if (item->HasProperty("artist_" + field + "_array"))
+      {
+        result[field] = item->GetProperty("artist_" + field + "_array");
+        continue;
+      }*/
       if (item->HasProperty("artist_" + field))
       {
         result[field] = item->GetProperty("artist_" + field);
         continue;
       }
 
+      if (field == "thumbnail")
+      {
+        if (item->HasVideoInfoTag())
+        {
+          if (!item->HasThumbnail() && !fetchedArt && item->GetVideoInfoTag()->m_iDbId > -1)
+          {
+            CVideoThumbLoader loader;
+            loader.FillLibraryArt(item.get());
+            fetchedArt = true;
+          }
+          if (item->HasThumbnail())
+            result["thumbnail"] = CTextureCache::GetWrappedImageURL(item->GetThumbnailImage());
+        }
+        else if (item->HasPictureInfoTag())
+        {
+          if (!item->HasThumbnail())
+            item->SetThumbnailImage(CTextureCache::GetWrappedThumbURL(item->GetPath()));
+          if (item->HasThumbnail())
+            result["thumbnail"] = CTextureCache::GetWrappedImageURL(item->GetThumbnailImage());
+        }
+        else
+        { // TODO: music art is not currently wrapped
+          if (item->HasThumbnail())
+            result["thumbnail"] = item->GetThumbnailImage();
+        }
+        if (!result.isMember("thumbnail"))
+          result["thumbnail"] = "";
+        continue;
+      }
+
       if (field == "fanart")
       {
-        CStdString cachedFanArt = item->GetCachedFanart();
-        if (!cachedFanArt.IsEmpty())
+        if (item->HasVideoInfoTag())
         {
-          result["fanart"] = cachedFanArt.c_str();
+          if (!item->HasProperty("fanart_image") && !fetchedArt && item->GetVideoInfoTag()->m_iDbId > -1)
+          {
+            CVideoThumbLoader loader;
+            loader.FillLibraryArt(item.get());
+            fetchedArt = true;
+          }
+          if (item->HasProperty("fanart_image"))
+            result["fanart"] = CTextureCache::GetWrappedImageURL(item->GetProperty("fanart_image").asString());
         }
+        else if (item->HasMusicInfoTag())
+        { // TODO: music art is not currently wrapped
+          CStdString fanart;
+          if (item->HasProperty("fanart_image"))
+            fanart = item->GetProperty("fanart_image").asString();
+          if (fanart.empty())
+            fanart = item->GetCachedFanart();
+          if (!fanart.empty())
+            result["fanart"] = fanart.c_str();
+        }
+        if (!result.isMember("fanart"))
+          result["fanart"] = "";
+        continue;
+      }
 
+      if (item->HasVideoInfoTag() && item->GetVideoContentType() == VIDEODB_CONTENT_TVSHOWS)
+      {
+        if (item->GetVideoInfoTag()->m_iSeason < 0 && field == "season")
+        {
+          result[field] = (int)item->GetProperty("totalseasons").asInteger();
+          continue;
+        }
+        if (field == "watchedepisodes")
+        {
+          result[field] = (int)item->GetProperty("watchedepisodes").asInteger();
+          continue;
+        }
+      }
+
+      if (field == "lastmodified" && item->m_dateTime.IsValid())
+      {
+        result[field] = item->m_dateTime.GetAsLocalizedDateTime();
         continue;
       }
     }
 
-    if (serialization.isMember(field) && !result.isMember(field))
+    if (serialization.isMember(field) && (!result.isMember(field) || result[field].empty()))
       result[field] = serialization[field];
   }
 }
@@ -105,7 +193,7 @@ void CFileItemHandler::HandleFileItemList(const char *ID, bool allowFile, const 
   {
     CVariant object;
     CFileItemPtr item = items.Get(i);
-    HandleFileItem(ID, allowFile, resultname, item, parameterObject, parameterObject["fields"], result);
+    HandleFileItem(ID, allowFile, resultname, item, parameterObject, parameterObject["properties"], result);
   }
 }
 
@@ -113,74 +201,89 @@ void CFileItemHandler::HandleFileItem(const char *ID, bool allowFile, const char
 {
   CVariant object;
   bool hasFileField = false;
-  bool hasThumbnailField = false;
 
-  for (unsigned int i = 0; i < validFields.size(); i++)
+  if (item.get())
   {
-    CStdString field = validFields[i].asString();
-
-    if (field == "file")
-      hasFileField = true;
-    if (field == "thumbnail")
-      hasThumbnailField = true;
-  }
-
-  if (allowFile && hasFileField)
-  {
-    if (item->HasVideoInfoTag() && !item->GetVideoInfoTag()->m_strFileNameAndPath.IsEmpty())
-      object["file"] = item->GetVideoInfoTag()->m_strFileNameAndPath.c_str();
-    if (item->HasMusicInfoTag() && !item->GetMusicInfoTag()->GetURL().IsEmpty())
-      object["file"] = item->GetMusicInfoTag()->GetURL().c_str();
-
-    if (!object.isMember("file"))
-      object["file"] = item->m_strPath.c_str();
-  }
-
-  if (ID)
-  {
-    if (stricmp(ID, "genreid") == 0)
-      object[ID] = atoi(item->m_strPath.TrimRight('/').c_str());
-    else if (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > 0)
-      object[ID] = (int)item->GetMusicInfoTag()->GetDatabaseId();
-    else if (item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > 0)
-      object[ID] = item->GetVideoInfoTag()->m_iDbId;
-
-    if (stricmp(ID, "id") == 0)
+    for (unsigned int i = 0; i < validFields.size(); i++)
     {
-      if (item->HasMusicInfoTag())
-        object["type"] = "song";
-      else if (item->HasVideoInfoTag())
-      {
-        switch (item->GetVideoContentType())
-        {
-          case VIDEODB_CONTENT_EPISODES:
-            object["type"] = "episode";
-            break;
+      CStdString field = validFields[i].asString();
 
-          case VIDEODB_CONTENT_MUSICVIDEOS:
-            object["type"] = "musicvideo";
-            break;
-
-          case VIDEODB_CONTENT_MOVIES:
-            object["type"] = "movie";
-            break;
-        }
-      }
-
-      if (!object.isMember("type"))
-        object["type"] = "unknown";
+      if (field == "file")
+        hasFileField = true;
     }
+
+    if (allowFile && hasFileField)
+    {
+      if (item->HasVideoInfoTag() && !item->GetVideoInfoTag()->GetPath().IsEmpty())
+          object["file"] = item->GetVideoInfoTag()->GetPath().c_str();
+      if (item->HasMusicInfoTag() && !item->GetMusicInfoTag()->GetURL().IsEmpty())
+        object["file"] = item->GetMusicInfoTag()->GetURL().c_str();
+
+      if (!object.isMember("file"))
+        object["file"] = item->GetPath().c_str();
+    }
+
+    if (ID)
+    {
+      if (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > 0)
+        object[ID] = (int)item->GetMusicInfoTag()->GetDatabaseId();
+      else if (item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > 0)
+        object[ID] = item->GetVideoInfoTag()->m_iDbId;
+
+      if (stricmp(ID, "id") == 0)
+      {
+        if (item->HasMusicInfoTag())
+        {
+          if (item->m_bIsFolder && item->IsAlbum())
+            object["type"] = "album";
+          else
+            object["type"] = "song";
+        }
+        else if (item->HasVideoInfoTag())
+        {
+          switch (item->GetVideoContentType())
+          {
+            case VIDEODB_CONTENT_EPISODES:
+              object["type"] = "episode";
+              break;
+
+            case VIDEODB_CONTENT_MUSICVIDEOS:
+              object["type"] = "musicvideo";
+              break;
+
+            case VIDEODB_CONTENT_MOVIES:
+              object["type"] = "movie";
+              break;
+
+            case VIDEODB_CONTENT_TVSHOWS:
+              object["type"] = "tvshow";
+              break;
+
+            default:
+              break;
+          }
+        }
+        else if (item->HasPictureInfoTag())
+          object["type"] = "picture";
+
+        if (!object.isMember("type"))
+          object["type"] = "unknown";
+      }
+    }
+
+    FillDetails(item.get(), item, validFields, object);
+
+    if (item->HasVideoInfoTag())
+      FillDetails(item->GetVideoInfoTag(), item, validFields, object);
+    if (item->HasMusicInfoTag())
+      FillDetails(item->GetMusicInfoTag(), item, validFields, object);
+    if (item->HasPictureInfoTag())
+      FillDetails(item->GetPictureInfoTag(), item, validFields, object);
+
+    object["label"] = item->GetLabel().c_str();
   }
-
-  if (hasThumbnailField && !item->GetThumbnailImage().IsEmpty())
-    object["thumbnail"] = item->GetThumbnailImage().c_str();
-
-  if (item->HasVideoInfoTag())
-    FillDetails(item->GetVideoInfoTag(), item, validFields, object);
-  if (item->HasMusicInfoTag())
-    FillDetails(item->GetMusicInfoTag(), item, validFields, object);
-
-  object["label"] = item->GetLabel().c_str();
+  else
+    object = CVariant(CVariant::VariantTypeNull);
 
   if (resultname)
   {
@@ -193,7 +296,6 @@ void CFileItemHandler::HandleFileItem(const char *ID, bool allowFile, const char
 
 bool CFileItemHandler::FillFileItemList(const CVariant &parameterObject, CFileItemList &list)
 {
-  CPlaylistOperations::FillFileItemList(parameterObject, list);
   CAudioLibrary::FillFileItemList(parameterObject, list);
   CVideoLibrary::FillFileItemList(parameterObject, list);
   CFileOperations::FillFileItemList(parameterObject, list);
@@ -204,7 +306,7 @@ bool CFileItemHandler::FillFileItemList(const CVariant &parameterObject, CFileIt
     bool added = false;
     for (int index = 0; index < list.Size(); index++)
     {
-      if (list[index]->m_strPath == file)
+      if (list[index]->GetPath() == file)
       {
         added = true;
         break;
@@ -214,6 +316,12 @@ bool CFileItemHandler::FillFileItemList(const CVariant &parameterObject, CFileIt
     if (!added)
     {
       CFileItemPtr item = CFileItemPtr(new CFileItem(file, false));
+      if (item->IsPicture())
+      {
+        CPictureInfoTag picture;
+        picture.Load(item->GetPath());
+        *item->GetPictureInfoTag() = picture;
+      }
       if (item->GetLabel().IsEmpty())
         item->SetLabel(CUtil::GetTitleFromPath(file, false));
       list.Add(item);
@@ -256,10 +364,14 @@ bool CFileItemHandler::ParseSortMethods(const CStdString &method, const bool &ig
     sortmethod = ignorethe ? SORT_METHOD_ALBUM_IGNORE_THE : SORT_METHOD_ALBUM;
   else if (method.Equals("genre"))
     sortmethod = SORT_METHOD_GENRE;
+  else if (method.Equals("country"))
+    sortmethod = SORT_METHOD_COUNTRY;
   else if (method.Equals("year"))
     sortmethod = SORT_METHOD_YEAR;
   else if (method.Equals("videorating"))
     sortmethod = SORT_METHOD_VIDEO_RATING;
+  else if (method.Equals("dateadded"))
+    sortmethod = SORT_METHOD_DATEADDED;
   else if (method.Equals("programcount"))
     sortmethod = SORT_METHOD_PROGRAM_COUNT;
   else if (method.Equals("playlist"))
@@ -286,10 +398,12 @@ bool CFileItemHandler::ParseSortMethods(const CStdString &method, const bool &ig
     sortmethod = SORT_METHOD_LASTPLAYED;
   else if (method.Equals("playcount"))
     sortmethod = SORT_METHOD_PLAYCOUNT;
+  else if (method.Equals("listeners"))
+    sortmethod = SORT_METHOD_LISTENERS;
   else if (method.Equals("unsorted"))
     sortmethod = SORT_METHOD_UNSORTED;
-  else if (method.Equals("max"))
-    sortmethod = SORT_METHOD_MAX;
+  else if (method.Equals("bitrate"))
+    sortmethod = SORT_METHOD_BITRATE;
   else
     return false;
 

@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <inttypes.h>
 #ifndef _MSC_VER
 #include <sys/socket.h>
 #endif
@@ -435,6 +436,9 @@ cmyth_file_seek(cmyth_file_t file, long long offset, int whence)
 	if ((offset == 0) && (whence == SEEK_CUR))
 		return file->file_pos;
 
+	if ((offset == file->file_pos) && (whence == SEEK_SET))
+		return file->file_pos;
+
 	while(file->file_pos < file->file_req) {
 		c = file->file_req - file->file_pos;
 		if(c > sizeof(msg))
@@ -446,14 +450,28 @@ cmyth_file_seek(cmyth_file_t file, long long offset, int whence)
 
 	pthread_mutex_lock(&mutex);
 
-	snprintf(msg, sizeof(msg),
-		 "QUERY_FILETRANSFER %ld[]:[]SEEK[]:[]%d[]:[]%d[]:[]%d[]:[]%d[]:[]%d",
-		 file->file_id,
-		 (int32_t)(offset >> 32),
-		 (int32_t)(offset & 0xffffffff),
-		 whence,
-		 (int32_t)(file->file_pos >> 32),
-		 (int32_t)(file->file_pos & 0xffffffff));
+	if (file->file_control->conn_version >= 66) {
+		/*
+		 * Since protocol 66 mythbackend expects to receive a single 64 bit integer rather than
+		 * two 32 bit hi and lo integers.
+		 */
+		snprintf(msg, sizeof(msg),
+			 "QUERY_FILETRANSFER %ld[]:[]SEEK[]:[]%"PRIu64"[]:[]%d[]:[]%"PRIu64,
+			 file->file_id,
+			 (int64_t)offset,
+			 whence,
+			 (int64_t)file->file_pos);
+	}
+	else {
+		snprintf(msg, sizeof(msg),
+			 "QUERY_FILETRANSFER %ld[]:[]SEEK[]:[]%d[]:[]%d[]:[]%d[]:[]%d[]:[]%d",
+			 file->file_id,
+			 (int32_t)(offset >> 32),
+			 (int32_t)(offset & 0xffffffff),
+			 whence,
+			 (int32_t)(file->file_pos >> 32),
+			 (int32_t)(file->file_pos & 0xffffffff));
+	}
 
 	if ((err = cmyth_send_message(file->file_control, msg)) < 0) {
 		cmyth_dbg(CMYTH_DBG_ERROR,
@@ -615,7 +633,7 @@ int cmyth_file_read(cmyth_file_t file, char *buf, unsigned long len)
 			}
 			if (len64 >= 0x100000000LL || len64 < 0) {
 				/* -1 seems to be a common result, but isn't valid so use 0 instead. */
-				cmyth_dbg (CMYTH_DBG_DEBUG,
+				cmyth_dbg (CMYTH_DBG_WARN,
 				           "%s: cmyth_rcv_int64() returned out of bound value (%d). Using 0\n",
 				           __FUNCTION__, (long)len64);
 				len64 = 0;

@@ -3,10 +3,12 @@ SRCS=AlarmClock.cpp \
      Archive.cpp \
      AsyncFileCopy.cpp \
      AutoPtrHandle.cpp \
+		 Base64.cpp \
      BitstreamStats.cpp \
      CharsetConverter.cpp \
      CPUInfo.cpp \
      Crc32.cpp \
+     CryptThreading.cpp \
      DownloadQueue.cpp \
      DownloadQueueManager.cpp \
      Fanart.cpp \
@@ -20,6 +22,8 @@ SRCS=AlarmClock.cpp \
      HTMLTable.cpp \
      HTMLUtil.cpp \
      HttpHeader.cpp \
+     HttpParser.cpp \
+		 HttpResponse.cpp \
      InfoLoader.cpp \
      JobManager.cpp \
      JSONVariantParser.cpp \
@@ -30,10 +34,10 @@ SRCS=AlarmClock.cpp \
      LCDFactory.cpp \
      log.cpp \
      md5.cpp \
-     PCMAmplifier.cpp \
-     PCMRemap.cpp \
+     Mime.cpp \
      PerformanceSample.cpp \
      PerformanceStats.cpp \
+     POUtils.cpp \
      RecentlyAddedJob.cpp \
      RegExp.cpp \
      RingBuffer.cpp \
@@ -44,14 +48,17 @@ SRCS=AlarmClock.cpp \
      ssrc.cpp \
      Stopwatch.cpp \
      StreamDetails.cpp \
+     StreamUtils.cpp \
      StringUtils.cpp \
      SystemInfo.cpp \
+     TimeSmoother.cpp \
      TimeUtils.cpp \
      TuxBoxUtil.cpp \
      URIUtils.cpp \
      Variant.cpp \
      Weather.cpp \
      Win32Exception.cpp \
+     XBMCTinyXML.cpp \
      XMLUtils.cpp \
 
 LIB=utils.a

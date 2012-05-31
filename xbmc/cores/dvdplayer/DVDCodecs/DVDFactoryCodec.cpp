@@ -41,10 +41,15 @@
 #include "Audio/DVDAudioCodecLibMad.h"
 #include "Audio/DVDAudioCodecPcm.h"
 #include "Audio/DVDAudioCodecLPcm.h"
+#if defined(TARGET_DARWIN_OSX) || defined(TARGET_DARWIN_IOS)
 #include "Audio/DVDAudioCodecPassthroughFFmpeg.h"
+#endif
+#include "Audio/DVDAudioCodecPassthrough.h"
 #include "Overlay/DVDOverlayCodecSSA.h"
 #include "Overlay/DVDOverlayCodecText.h"
+#include "Overlay/DVDOverlayCodecTX3G.h"
 #include "Overlay/DVDOverlayCodecFFmpeg.h"
+
 
 #include "DVDStreamInfo.h"
 #include "settings/GUISettings.h"
@@ -117,10 +122,15 @@ CDVDOverlayCodec* CDVDFactoryCodec::OpenCodec(CDVDOverlayCodec* pCodec, CDVDStre
 }
 
 
-CDVDVideoCodec* CDVDFactoryCodec::CreateVideoCodec( CDVDStreamInfo &hint )
+CDVDVideoCodec* CDVDFactoryCodec::CreateVideoCodec(CDVDStreamInfo &hint, unsigned int surfaces, const std::vector<ERenderFormat>& formats)
 {
   CDVDVideoCodec* pCodec = NULL;
   CDVDCodecOptions options;
+
+  if(formats.size() == 0)
+    options.m_formats.push_back(RENDER_FMT_YUV420P);
+  else
+    options.m_formats = formats;
 
   //when support for a hardware decoder is not compiled in
   //only print it if it's actually available on the platform
@@ -169,12 +179,15 @@ CDVDVideoCodec* CDVDFactoryCodec::CreateVideoCodec( CDVDStreamInfo &hint )
     if( (pCodec = OpenCodec(new CDVDVideoCodecLibMpeg2(), hint, options)) ) return pCodec;
   }
 #if defined(HAVE_LIBVDADECODER)
-  if (hint.width > 720 && g_sysinfo.HasVDADecoder())
+  if (!hint.software && g_guiSettings.GetBool("videoplayer.usevda"))
   {
-    if (g_guiSettings.GetBool("videoplayer.usevda") && !hint.software && hint.codec == CODEC_ID_H264)
+    if (g_sysinfo.HasVDADecoder())
     {
-      CLog::Log(LOGINFO, "Trying Apple VDA Decoder...");
-      if ( (pCodec = OpenCodec(new CDVDVideoCodecVDA(), hint, options)) ) return pCodec;
+      if (hint.codec == CODEC_ID_H264 && !hint.ptsinvalid)
+      {
+        CLog::Log(LOGINFO, "Trying Apple VDA Decoder...");
+        if ( (pCodec = OpenCodec(new CDVDVideoCodecVDA(), hint, options)) ) return pCodec;
+      }
     }
   }
 #endif
@@ -241,10 +254,13 @@ CDVDVideoCodec* CDVDFactoryCodec::CreateVideoCodec( CDVDStreamInfo &hint )
   if( pixelrate > 1400.0f*720.0f*30.0f )
   {
     CLog::Log(LOGINFO, "CDVDFactoryCodec - High video resolution detected %dx%d, trying half resolution decoding ", hint.width, hint.height);
-    options.push_back(CDVDCodecOption("lowres","1"));
+    options.m_keys.push_back(CDVDCodecOption("lowres","1"));
   }
 #endif
 
+  CStdString value;
+  value.Format("%d", surfaces);
+  options.m_keys.push_back(CDVDCodecOption("surfaces", value));
   if( (pCodec = OpenCodec(new CDVDVideoCodecFFmpeg(), hint, options)) ) return pCodec;
 
   return NULL;
@@ -257,8 +273,20 @@ CDVDAudioCodec* CDVDFactoryCodec::CreateAudioCodec( CDVDStreamInfo &hint, bool p
 
   if (passthrough)
   {
-    pCodec = OpenCodec( new CDVDAudioCodecPassthroughFFmpeg(), hint, options);
-    if ( pCodec ) return pCodec;
+#if defined(TARGET_DARWIN_OSX) || defined(TARGET_DARWIN_IOS)
+    switch(hint.codec)
+    {
+      case CODEC_ID_AC3:
+      case CODEC_ID_DTS:
+        pCodec = OpenCodec( new CDVDAudioCodecPassthroughFFmpeg(), hint, options );
+        if( pCodec ) return pCodec;
+        break;
+      default:
+        break;      
+    }
+#endif
+    pCodec = OpenCodec( new CDVDAudioCodecPassthrough(), hint, options );
+    if( pCodec ) return pCodec;
   }
 
   switch (hint.codec)
@@ -331,6 +359,10 @@ CDVDOverlayCodec* CDVDFactoryCodec::CreateOverlayCodec( CDVDStreamInfo &hint )
       if( pCodec ) return pCodec;
 
       pCodec = OpenCodec(new CDVDOverlayCodecText(), hint, options);
+      if( pCodec ) return pCodec;
+
+    case CODEC_ID_MOV_TEXT:
+      pCodec = OpenCodec(new CDVDOverlayCodecTX3G(), hint, options);
       if( pCodec ) return pCodec;
 
     default:

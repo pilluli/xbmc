@@ -51,11 +51,10 @@ CGUIDialogSmartPlaylistRule::~CGUIDialogSmartPlaylistRule()
 {
 }
 
-bool CGUIDialogSmartPlaylistRule::OnAction(const CAction &action)
+bool CGUIDialogSmartPlaylistRule::OnBack(int actionID)
 {
-  if (action.GetID() == ACTION_PREVIOUS_MENU)
-    m_cancelled = true;
-  return CGUIDialog::OnAction(action);
+  m_cancelled = true;
+  return CGUIDialog::OnBack(actionID);
 }
 
 bool CGUIDialogSmartPlaylistRule::OnMessage(CGUIMessage& message)
@@ -185,7 +184,14 @@ void CGUIDialogSmartPlaylistRule::OnBrowse()
     CStdString path = "special://videoplaylists/";
     if (m_type.Equals("songs") || m_type.Equals("albums"))
       path = "special://musicplaylists/";
-    XFILE::CDirectory::GetDirectory(path, items, ".xsp",false,false,XFILE::DIR_CACHE_ONCE,true,true);
+    XFILE::CDirectory::GetDirectory(path, items, ".xsp", XFILE::DIR_FLAG_NO_FILE_DIRS);
+    for (int i = 0; i < items.Size(); i++)
+    {
+      CFileItemPtr item = items[i];
+      CSmartPlaylist playlist;
+      if (playlist.OpenAndReadName(item->GetPath()))
+        item->SetLabel(playlist.GetName());
+    }
     iLabel = 559;
   }
   else if (m_rule.m_field == CSmartPlaylistRule::FIELD_PATH)
@@ -203,6 +209,11 @@ void CGUIDialogSmartPlaylistRule::OnBrowse()
     CGUIDialogFileBrowser::ShowAndGetDirectory(sources,g_localizeStrings.Get(657),m_rule.m_parameter,false);
     UpdateButtons();
     return;
+  }
+  else if (m_rule.m_field == CSmartPlaylistRule::FIELD_SET)
+  {
+    videodatabase.GetSetsNav("videodb://1/7/", items, VIDEODB_CONTENT_MOVIES);
+    iLabel = 20434;
   }
   else
   { // TODO: Add browseability in here.
@@ -330,6 +341,7 @@ void CGUIDialogSmartPlaylistRule::UpdateButtons()
   case CSmartPlaylistRule::BROWSEABLE_FIELD:
   case CSmartPlaylistRule::PLAYLIST_FIELD:
   case CSmartPlaylistRule::TEXTIN_FIELD:
+  case CSmartPlaylistRule::NUMERIC_FIELD:
     type = CGUIEditControl::INPUT_TYPE_TEXT;
     break;
   case CSmartPlaylistRule::DATE_FIELD:
@@ -342,7 +354,6 @@ void CGUIDialogSmartPlaylistRule::UpdateButtons()
   case CSmartPlaylistRule::SECONDS_FIELD:
     type = CGUIEditControl::INPUT_TYPE_SECONDS;
     break;
-  case CSmartPlaylistRule::NUMERIC_FIELD:
   case CSmartPlaylistRule::BOOLEAN_FIELD:
     type = CGUIEditControl::INPUT_TYPE_NUMBER;
     break;
@@ -378,7 +389,7 @@ bool CGUIDialogSmartPlaylistRule::EditRule(CSmartPlaylistRule &rule, const CStdS
   if (!editor) return false;
 
   editor->m_rule = rule;
-  editor->m_type = type;
+  editor->m_type = type == "mixed" ? "songs" : type;
   editor->DoModal(g_windowManager.GetActiveWindow());
   rule = editor->m_rule;
   return !editor->m_cancelled;

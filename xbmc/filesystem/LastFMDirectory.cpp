@@ -27,7 +27,7 @@
 #include "dialogs/GUIDialogProgress.h"
 #include "settings/GUISettings.h"
 #include "FileItem.h"
-#include "FileCurl.h"
+#include "CurlFile.h"
 #include "utils/StringUtils.h"
 #include "guilib/LocalizeStrings.h"
 #include "utils/log.h"
@@ -69,7 +69,7 @@ bool CLastFMDirectory::RetrieveList(CStdString url)
     m_dlgProgress->Progress();
   }
 
-  CThread thread(this);
+  CThread thread(this, "CLastFMDirectory");
   m_strSource = url;
   m_strDestination = "special://temp/lastfm.xml";
   thread.Create();
@@ -121,7 +121,7 @@ void CLastFMDirectory::AddEntry(int iString, CStdString strPath, CStdString strI
 
   CFileItemPtr pItem(new CFileItem);
   pItem->SetLabel(strLabel);
-  pItem->m_strPath = strPath;
+  pItem->SetPath(strPath);
   pItem->m_bIsFolder = bFolder;
   pItem->SetLabelPreformated(true);
   //the extra info is used in the mediawindows to determine which items are needed in the contextmenu
@@ -162,7 +162,7 @@ void CLastFMDirectory::AddListEntry(const char *name, const char *artist, const 
   }
 
   pItem->SetLabel(strName);
-  pItem->m_strPath = strPath;
+  pItem->SetPath(strPath);
   pItem->m_bIsFolder = true;
   pItem->SetLabelPreformated(true);
 
@@ -627,7 +627,7 @@ DIR_CACHE_TYPE CLastFMDirectory::GetCacheType(const CStdString& strPath) const
 
 void CLastFMDirectory::Run()
 {
-  XFILE::CFileCurl http;
+  XFILE::CCurlFile http;
   if (!http.Download(m_strSource, m_strDestination))
     m_Error=true;
 

@@ -21,10 +21,11 @@
 
 #include "RSSDirectory.h"
 #include "FileItem.h"
-#include "FileCurl.h"
+#include "CurlFile.h"
 #include "settings/Settings.h"
+#include "settings/AdvancedSettings.h"
 #include "utils/URIUtils.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "utils/HTMLUtil.h"
 #include "utils/StringUtils.h"
 #include "video/VideoInfoTag.h"
@@ -33,6 +34,7 @@
 #include "URL.h"
 #include "settings/GUISettings.h"
 #include "climits"
+#include "threads/SingleLock.h"
 
 using namespace XFILE;
 using namespace std;
@@ -65,9 +67,11 @@ namespace {
 
 }
 
+std::map<CStdString,CDateTime> CRSSDirectory::m_cache;
+CCriticalSection CRSSDirectory::m_section;
+
 CRSSDirectory::CRSSDirectory()
 {
-  SetCacheDirectory(DIR_CACHE_ONCE);
 }
 
 CRSSDirectory::~CRSSDirectory()
@@ -200,7 +204,7 @@ static void ParseItemMRSS(CFileItem* item, SResources& resources, TiXmlElement* 
 
     /* okey this is silly, boxee what did you think?? */
     if     (scheme == "urn:boxee:genre")
-      vtag->m_strGenre = text;
+      vtag->m_genre = StringUtils::Split(text, g_advancedSettings.m_videoItemSeparator);
     else if(scheme == "urn:boxee:title-type")
     {
       if     (text == "tv")
@@ -219,7 +223,7 @@ static void ParseItemMRSS(CFileItem* item, SResources& resources, TiXmlElement* 
     else if(scheme == "urn:boxee:source")
       item->SetProperty("boxee:provider_source", text);
     else
-      vtag->m_strGenre = text;
+      vtag->m_genre = StringUtils::Split(text, g_advancedSettings.m_videoItemSeparator);
   }
   else if(name == "rating")
   {
@@ -233,10 +237,10 @@ static void ParseItemMRSS(CFileItem* item, SResources& resources, TiXmlElement* 
   {
     CStdString role = item_child->Attribute("role");
     if     (role == "director")
-      vtag->m_strDirector += ", " + text;
+      vtag->m_director.push_back(text);
     else if(role == "author"
          || role == "writer")
-      vtag->m_strWritingCredits += ", " + text;
+      vtag->m_writingCredits.push_back(text);
     else if(role == "actor")
     {
       SActorInfo actor;
@@ -245,7 +249,7 @@ static void ParseItemMRSS(CFileItem* item, SResources& resources, TiXmlElement* 
     }
   }
   else if(name == "copyright")
-    vtag->m_strStudio = text;
+    vtag->m_studio = StringUtils::Split(text, g_advancedSettings.m_videoItemSeparator);
   else if(name == "keywords")
     item->SetProperty("keywords", text);
 
@@ -269,7 +273,7 @@ static void ParseItemItunes(CFileItem* item, SResources& resources, TiXmlElement
   else if(name == "subtitle")
     vtag->m_strPlotOutline = text;
   else if(name == "author")
-    vtag->m_strWritingCredits += ", " + text;
+    vtag->m_writingCredits.push_back(text);
   else if(name == "duration")
     vtag->m_strRuntime = text;
   else if(name == "keywords")
@@ -398,7 +402,7 @@ static void ParseItemZink(CFileItem* item, SResources& resources, TiXmlElement* 
   else if(name == "views")
     vtag->m_playCount = atoi(text);
   else if(name == "airdate")
-    vtag->m_strFirstAired = text;
+    vtag->m_firstAired.SetFromDateString(text);
   else if(name == "userrating")
     vtag->m_fRating = (float)atof(text.c_str());
   else if(name == "duration")
@@ -535,17 +539,17 @@ static void ParseItem(CFileItem* item, TiXmlElement* root, const CStdString& pat
   if(best != resources.end())
   {
     item->SetMimeType(best->mime);
-    item->m_strPath = best->path;
+    item->SetPath(best->path);
     item->m_dwSize  = best->size;
 
     if(best->duration)
       item->SetProperty("duration", StringUtils::SecondsToTimeString(best->duration));    
 
     /* handling of mimetypes fo directories are sub optimal at best */
-    if(best->mime == "application/rss+xml" && item->m_strPath.Left(7).Equals("http://"))
-      item->m_strPath.replace(0, 7, "rss://");
+    if(best->mime == "application/rss+xml" && item->GetPath().Left(7).Equals("http://"))
+      item->SetPath("rss://" + item->GetPath().Mid(7));
 
-    if(item->m_strPath.Left(6).Equals("rss://"))
+    if(item->GetPath().Left(6).Equals("rss://"))
       item->m_bIsFolder = true;
     else
       item->m_bIsFolder = false;
@@ -557,15 +561,12 @@ static void ParseItem(CFileItem* item, TiXmlElement* root, const CStdString& pat
   if(item->HasVideoInfoTag())
   {
     CVideoInfoTag* vtag = item->GetVideoInfoTag();
-    // clean up ", " added during build
-    vtag->m_strDirector.Delete(0, 2);
-    vtag->m_strWritingCredits.Delete(0, 2);
 
     if(item->HasProperty("duration")    && vtag->m_strRuntime.IsEmpty())
-      vtag->m_strRuntime = item->GetProperty("duration");
+      vtag->m_strRuntime = item->GetProperty("duration").asString();
 
     if(item->HasProperty("description") && vtag->m_strPlot.IsEmpty())
-      vtag->m_strPlot = item->GetProperty("description");
+      vtag->m_strPlot = item->GetProperty("description").asString();
 
     if(vtag->m_strPlotOutline.IsEmpty() && !vtag->m_strPlot.IsEmpty())
     {
@@ -585,19 +586,19 @@ bool CRSSDirectory::GetDirectory(const CStdString& path, CFileItemList &items)
 {
   CStdString strPath(path);
   URIUtils::RemoveSlashAtEnd(strPath);
-
-  /* check cache */
-  if(m_path == strPath)
+  std::map<CStdString,CDateTime>::iterator it;
+  items.SetPath(strPath);
+  CSingleLock lock(m_section);
+  if ((it=m_cache.find(strPath)) != m_cache.end())
   {
-    items.Copy(m_items);
-    return true;
+    if (it->second > CDateTime::GetCurrentDateTime() && 
+        items.Load())
+      return true;
+    m_cache.erase(it);
   }
+  lock.Leave();
 
-  /* clear cache */
-  m_items.Clear();
-  m_path == "";
-
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   if (!xmlDoc.LoadFile(strPath))
   {
     CLog::Log(LOGERROR,"failed to load xml from <%s>. error: <%d>", strPath.c_str(), xmlDoc.ErrorId());
@@ -630,7 +631,7 @@ bool CRSSDirectory::GetDirectory(const CStdString& path, CFileItemList &items)
 
     item->SetProperty("isrss", "1");
 
-    if (!item->m_strPath.IsEmpty())
+    if (!item->GetPath().IsEmpty())
       items.Add(item);
   }
 
@@ -639,15 +640,23 @@ bool CRSSDirectory::GetDirectory(const CStdString& path, CFileItemList &items)
   items.AddSortMethod(SORT_METHOD_SIZE     , 553, LABEL_MASKS("%L", "%I", "%L", "%I"));  // FileName, Size | Foldername, Size
   items.AddSortMethod(SORT_METHOD_DATE     , 552, LABEL_MASKS("%L", "%J", "%L", "%J"));  // FileName, Date | Foldername, Date
 
-  m_items.Copy(items);
-  m_path  = strPath;
+  CDateTime time = CDateTime::GetCurrentDateTime();
+  int mins = 60;
+  TiXmlElement* ttl = docHandle.FirstChild("rss").FirstChild("ttl").Element();
+  if (ttl)
+    mins = strtol(ttl->FirstChild()->Value(),NULL,10);
+  time += CDateTimeSpan(0,0,mins,0);
+  items.SetPath(strPath);
+  items.Save();
+  CSingleLock lock2(m_section);
+  m_cache.insert(make_pair(strPath,time));
 
   return true;
 }
 
 bool CRSSDirectory::Exists(const char* strPath)
 {
-  CFileCurl rss;
+  CCurlFile rss;
   CURL url(strPath);
   return rss.Exists(url);
 }

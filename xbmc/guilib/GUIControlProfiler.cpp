@@ -20,7 +20,7 @@
  */
 
 #include "GUIControlProfiler.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "utils/TimeUtils.h"
 
 bool CGUIControlProfiler::m_bIsRunning = false;
@@ -131,8 +131,6 @@ void CGUIControlProfilerItem::SaveToXML(TiXmlElement *parent)
     lpszType = "mover"; break;
   case CGUIControl::GUICONTROL_RESIZE:
     lpszType = "resize"; break;
-  case CGUIControl::GUICONTROL_BUTTONBAR:
-    lpszType = "buttonscroller"; break;
   case CGUIControl::GUICONTROL_EDIT:
     lpszType = "edit"; break;
   case CGUIControl::GUICONTROL_VISUALISATION:
@@ -342,7 +340,7 @@ bool CGUIControlProfiler::SaveResults(void)
   if (m_strOutputFile.IsEmpty())
     return false;
 
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
   TiXmlDeclaration decl("1.0", "", "yes");
   doc.InsertEndChild(decl);
 

@@ -22,6 +22,7 @@
 
 #ifdef HAS_DX
 
+#include "threads/SystemClock.h"
 #include "settings/Settings.h"
 #include "RenderSystemDX.h"
 #include "utils/log.h"
@@ -171,6 +172,10 @@ void CRenderSystemDX::SetMonitor(HMONITOR monitor)
 
 bool CRenderSystemDX::ResetRenderSystem(int width, int height, bool fullScreen, float refreshRate)
 {
+  HMONITOR hMonitor = MonitorFromWindow(m_hDeviceWnd, MONITOR_DEFAULTTONULL);
+  if (hMonitor)
+    SetMonitor(hMonitor);
+
   SetRenderParams(width, height, fullScreen, refreshRate);
 
   CRect rc;
@@ -189,6 +194,18 @@ bool CRenderSystemDX::ResetRenderSystem(int width, int height, bool fullScreen, 
   
   return true;
 }
+
+void CRenderSystemDX::OnMove()
+{
+  if (!m_bRenderCreated)
+    return;
+
+  HMONITOR currentMonitor = m_pD3D->GetAdapterMonitor(m_adapter);
+  HMONITOR newMonitor = MonitorFromWindow(m_hDeviceWnd, MONITOR_DEFAULTTONULL);
+  if (newMonitor != NULL && currentMonitor != newMonitor)
+    ResetRenderSystem(m_nBackBufferWidth, m_nBackBufferHeight, m_bFullScreenDevice, m_refreshRate);
+}
+
 
 bool CRenderSystemDX::IsSurfaceFormatOk(D3DFORMAT surfFormat, DWORD usage)
 {
@@ -241,7 +258,7 @@ void CRenderSystemDX::BuildPresentParameters()
 
   ZeroMemory( &m_D3DPP, sizeof(D3DPRESENT_PARAMETERS) );
   m_D3DPP.Windowed           = m_useWindowedDX;
-  m_D3DPP.SwapEffect         = D3DSWAPEFFECT_DISCARD;
+  m_D3DPP.SwapEffect         = D3DSWAPEFFECT_FLIP;
   m_D3DPP.BackBufferCount    = 2;
 
   if(m_useD3D9Ex && (osvi.dwMajorVersion == 6 && osvi.dwMinorVersion >= 1 || osvi.dwMajorVersion > 6))
@@ -540,7 +557,7 @@ bool CRenderSystemDX::CreateDevice()
   return true;
 }
 
-bool CRenderSystemDX::PresentRenderImpl()
+bool CRenderSystemDX::PresentRenderImpl(const CDirtyRegionList &dirty)
 {
   HRESULT hr;
 
@@ -552,7 +569,7 @@ bool CRenderSystemDX::PresentRenderImpl()
 
   //CVideoReferenceClock polls GetRasterStatus too,
   //polling it from two threads at the same time is bad
-  if (g_advancedSettings.m_sleepBeforeFlip > 0 && g_VideoReferenceClock.ThreadHandle() == NULL)
+  if (g_advancedSettings.m_sleepBeforeFlip > 0 && !g_VideoReferenceClock.IsRunning())
   {
     //save current thread priority and set thread priority to THREAD_PRIORITY_TIME_CRITICAL
     int priority = GetThreadPriority(GetCurrentThread());
@@ -732,12 +749,12 @@ bool CRenderSystemDX::IsExtSupported(const char* extension)
   return false;
 }
 
-bool CRenderSystemDX::PresentRender()
+bool CRenderSystemDX::PresentRender(const CDirtyRegionList &dirty)
 {
   if (!m_bRenderCreated)
     return false;
 
-  bool result = PresentRenderImpl();
+  bool result = PresentRenderImpl(dirty);
 
   return result;
 }
@@ -805,14 +822,30 @@ void CRenderSystemDX::SetCameraPosition(const CPoint &camera, int screenWidth, i
   D3DXMATRIX mtxProjection;
   D3DXMatrixPerspectiveOffCenterLH(&mtxProjection, (-w - offset.x)*0.5f, (w - offset.x)*0.5f, (-h + offset.y)*0.5f, (h + offset.y)*0.5f, h, 100*h);
   m_pD3DDevice->SetTransform(D3DTS_PROJECTION, &mtxProjection);
+
+  m_world = mtxWorld;
+  m_view = mtxView;
+  m_projection = mtxProjection;
+  m_viewPort = viewport;
+}
+
+void CRenderSystemDX::Project(float &x, float &y, float &z)
+{
+  D3DXVECTOR3 vScreenCoord;
+  D3DXVECTOR3 vLocation(x, y, z);
+
+  D3DXVec3Project(&vScreenCoord, &vLocation, &m_viewPort, &m_projection, &m_view, &m_world);
+  x = vScreenCoord.x;
+  y = vScreenCoord.y;
+  z = 0;
 }
 
 bool CRenderSystemDX::TestRender()
 {
-  static DWORD lastTime = 0;
+  static unsigned int lastTime = 0;
   static float delta = 0;
 
-  DWORD thisTime = CTimeUtils::GetTimeMS();
+  unsigned int thisTime = XbmcThreads::SystemClockMillis();
 
   if(thisTime - lastTime > 10)
   {
@@ -921,10 +954,10 @@ void CRenderSystemDX::SetScissors(const CRect& rect)
     return;
 
   RECT scissor;
-  scissor.left   = std::max(0, MathUtils::round_int(rect.x1));
-  scissor.top    = std::max(0, MathUtils::round_int(rect.y1));
-  scissor.right  = std::min(static_cast<int>(m_nBackBufferWidth), MathUtils::round_int(rect.x2));
-  scissor.bottom = std::min(static_cast<int>(m_nBackBufferHeight), MathUtils::round_int(rect.y2));
+  scissor.left   = MathUtils::round_int(rect.x1);
+  scissor.top    = MathUtils::round_int(rect.y1);
+  scissor.right  = MathUtils::round_int(rect.x2);
+  scissor.bottom = MathUtils::round_int(rect.y2);
   m_pD3DDevice->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
   m_pD3DDevice->SetScissorRect(&scissor);
 }

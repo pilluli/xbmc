@@ -105,7 +105,7 @@ void CSkinInfo::Start(const CStdString &strBaseDir)
   if (!m_resolutions.size())
   { // try falling back to whatever resolutions exist in the directory
     CFileItemList items;
-    CDirectory::GetDirectory(Path(), items, "", false);
+    CDirectory::GetDirectory(Path(), items, "", DIR_FLAG_NO_FILE_DIRS);
     for (int i = 0; i < items.Size(); i++)
     {
       RESOLUTION_INFO res;
@@ -113,7 +113,6 @@ void CSkinInfo::Start(const CStdString &strBaseDir)
         m_resolutions.push_back(res);
     }
   }
-  LoadIncludes();
 }
 
 struct closestRes
@@ -175,7 +174,7 @@ double CSkinInfo::GetMinVersion()
 
 void CSkinInfo::LoadIncludes()
 {
-  CStdString includesPath = PTH_IC(GetSkinPath("includes.xml"));
+  CStdString includesPath = CSpecialProtocol::TranslatePathConvertCase(GetSkinPath("includes.xml"));
   CLog::Log(LOGINFO, "Loading skin includes from %s", includesPath.c_str());
   m_includes.ClearIncludes();
   m_includes.LoadIncludes(includesPath);
@@ -255,6 +254,11 @@ bool CSkinInfo::IsInUse() const
 {
   // Could extend this to prompt for reverting to the standard skin perhaps
   return g_guiSettings.GetString("lookandfeel.skin") == ID();
+}
+
+const INFO::CSkinVariableString* CSkinInfo::CreateSkinVariable(const CStdString& name, int context)
+{
+  return m_includes.CreateSkinVariable(name, context);
 }
 
 } /*namespace ADDON*/

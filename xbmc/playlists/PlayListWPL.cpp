@@ -21,7 +21,7 @@
 
 #include "PlayListWPL.h"
 #include "Util.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "settings/AdvancedSettings.h"
 #include "filesystem/File.h"
 #include "utils/log.h"
@@ -59,7 +59,7 @@ CPlayListWPL::~CPlayListWPL(void)
 
 bool CPlayListWPL::LoadData(istream& stream)
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
 
   stream >> xmlDoc;
   if (xmlDoc.Error())
@@ -93,12 +93,11 @@ bool CPlayListWPL::LoadData(istream& stream)
     CStdString strFileName = pMediaElement->Attribute("src");
     if (strFileName.size())
     {
-      if (URIUtils::IsRemote(m_strBasePath) && g_advancedSettings.m_pathSubstitutions.size() > 0)
-        strFileName = CUtil::SubstitutePath(strFileName);
+      strFileName = URIUtils::SubstitutePath(strFileName);
       CUtil::GetQualifiedFilename(m_strBasePath, strFileName);
       CStdString strDescription = URIUtils::GetFileName(strFileName);
       CFileItemPtr newItem(new CFileItem(strDescription));
-      newItem->m_strPath = strFileName;
+      newItem->SetPath(strFileName);
       Add(newItem);
     }
     pMediaElement = pMediaElement->NextSiblingElement();
@@ -129,7 +128,7 @@ void CPlayListWPL::Save(const CStdString& strFileName) const
   for (int i = 0; i < (int)m_vecItems.size(); ++i)
   {
     CFileItemPtr item = m_vecItems[i];
-    write.AppendFormat("            <media src=%c%s%c/>", 34, item->m_strPath.c_str(), 34);
+    write.AppendFormat("            <media src=%c%s%c/>", 34, item->GetPath().c_str(), 34);
   }
   write.AppendFormat("        </seq>\n");
   write.AppendFormat("    </body>\n");

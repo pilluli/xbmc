@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "DllLibCMyth.h"
 #include "MythSession.h"
 #include "video/VideoInfoTag.h"
@@ -59,7 +60,7 @@ void CMythSession::CheckIdle()
   for (it = m_sessions.begin(); it != m_sessions.end(); )
   {
     CMythSession* session = *it;
-    if (session->m_timestamp + (MYTH_IDLE_TIMEOUT * 1000) < CTimeUtils::GetTimeMS())
+    if ((XbmcThreads::SystemClockMillis() - session->m_timestamp) > (MYTH_IDLE_TIMEOUT * 1000) )
     {
       CLog::Log(LOGINFO, "%s - closing idle connection to MythTV backend: %s", __FUNCTION__, session->m_hostname.c_str());
       delete session;
@@ -97,7 +98,7 @@ void CMythSession::ReleaseSession(CMythSession* session)
 {
   CLog::Log(LOGDEBUG, "%s - Releasing MythTV session: %p", __FUNCTION__, session);
   session->SetListener(NULL);
-  session->m_timestamp = CTimeUtils::GetTimeMS();
+  session->m_timestamp = XbmcThreads::SystemClockMillis();
   CSingleLock lock(m_section_session);
   m_sessions.push_back(session);
 }
@@ -165,7 +166,7 @@ void CMythSession::SetFileItemMetaData(CFileItem &item, cmyth_proginfo_t program
   if (tag->m_strPlot.Left(tag->m_strPlotOutline.length()) != tag->m_strPlotOutline && !tag->m_strPlotOutline.IsEmpty())
     tag->m_strPlot = tag->m_strPlotOutline + '\n' + tag->m_strPlot;
    */
-  tag->m_strGenre         = GetValue(m_dll->proginfo_category(program)); // e.g. Sports
+  tag->m_genre            = StringUtils::Split(GetValue(m_dll->proginfo_category(program)), g_advancedSettings.m_videoItemSeparator); // e.g. Sports
   tag->m_strAlbum         = GetValue(m_dll->proginfo_chansign(program)); // e.g. TV3
   tag->m_strRuntime       = StringUtils::SecondsToTimeString(m_dll->proginfo_length_sec(program));
   
@@ -178,7 +179,7 @@ void CMythSession::SetFileItemMetaData(CFileItem &item, cmyth_proginfo_t program
   CStdString originalairdate = GetValue(m_dll->proginfo_originalairdate(program)).GetAsDBDate();
   if (originalairdate != "1970-01-01"
   &&  originalairdate != "1969-12-31")
-    tag->m_strFirstAired = originalairdate;
+  tag->m_firstAired.SetFromDateString(originalairdate);
 
   /*
    * Video sort title is the raw title with the date appended on the end in a sortable format so
@@ -192,7 +193,7 @@ void CMythSession::SetFileItemMetaData(CFileItem &item, cmyth_proginfo_t program
   /*
    * Set further FileItem and VideoInfoTag meta-data based on whether it is LiveTV or not.
    */
-  CURL url(item.m_strPath);
+  CURL url(item.GetPath());
   if (url.GetFileName().Left(9) == "channels/")
   {
     /*
@@ -229,7 +230,7 @@ void CMythSession::SetFileItemMetaData(CFileItem &item, cmyth_proginfo_t program
     if (!number.IsEmpty())
     {
       url.SetFileName("channels/" + number + ".ts"); // e.g. channels/3.ts
-      item.m_strPath = url.Get();
+      item.SetPath(url.Get());
     }
     CStdString chanicon = GetValue(m_dll->proginfo_chanicon(program));
     if (!chanicon.IsEmpty())
@@ -358,7 +359,7 @@ void CMythSession::SetSeasonAndEpisode(const cmyth_proginfo_t &program, int *sea
   return;
 }
 
-CMythSession::CMythSession(const CURL& url)
+CMythSession::CMythSession(const CURL& url) : CThread("CMythSession")
 {
   m_control   = NULL;
   m_event     = NULL;
@@ -367,7 +368,7 @@ CMythSession::CMythSession(const CURL& url)
   m_username  = url.GetUserName() == "" ? MYTH_DEFAULT_USERNAME : url.GetUserName();
   m_password  = url.GetPassWord() == "" ? MYTH_DEFAULT_PASSWORD : url.GetPassWord();
   m_port      = url.HasPort() ? url.GetPort() : MYTH_DEFAULT_PORT;
-  m_timestamp = CTimeUtils::GetTimeMS();
+  m_timestamp = XbmcThreads::SystemClockMillis();
   m_dll = new DllLibCMyth;
   m_dll->Load();
   if (m_dll->IsLoaded())

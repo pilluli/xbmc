@@ -38,15 +38,23 @@
 #include <sys/resource.h>
 #include <signal.h>
 #endif
-#ifdef __APPLE__
-#include "Util.h"
+#if defined(TARGET_DARWIN_OSX)
+  #include "Util.h"
+  // SDL redefines main as SDL_main 
+  #ifdef HAS_SDL
+    #include <SDL/SDL.h>
+  #endif
 #endif
 #ifdef HAS_LIRC
 #include "input/linux/LIRC.h"
 #endif
+#include "XbmcContext.h"
 
 int main(int argc, char* argv[])
 {
+  // set up some xbmc specific relationships
+  XBMC::Context context;
+
   int status = -1;
   //this can't be set from CAdvancedSettings::Initialize() because it will overwrite
   //the loglevel set with the --debug flag
@@ -99,23 +107,4 @@ int main(int argc, char* argv[])
   }
 
   return status;
-}
-
-extern "C"
-{
-  void mp_msg( int x, int lev, const char *format, ... )
-  {
-    va_list va;
-    static char tmp[2048];
-    va_start(va, format);
-#ifndef _LINUX
-    _vsnprintf(tmp, 2048, format, va);
-#else
-    vsnprintf(tmp, 2048, format, va);
-#endif
-    va_end(va);
-    tmp[2048 - 1] = 0;
-
-    OutputDebugString(tmp);
-  }
 }

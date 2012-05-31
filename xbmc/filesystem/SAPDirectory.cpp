@@ -17,6 +17,7 @@
 * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
+#include "threads/SystemClock.h"
 #include "system.h" // WIN32INCLUDES - not sure why this is needed
 #include "GUIUserMessages.h"
 #include "guilib/GUIWindowManager.h"
@@ -29,6 +30,9 @@
 #include "URL.h"
 #ifdef __APPLE__
 #include "OSXGNUReplacements.h" // strnlen
+#endif
+#ifdef __FreeBSD__
+#include "freebsd/FreeBSDGNUReplacements.h"
 #endif
 
 #include <sys/socket.h>
@@ -271,7 +275,7 @@ namespace SDP
 using namespace SDP;
 
 
-CSAPSessions::CSAPSessions()
+CSAPSessions::CSAPSessions() : CThread("CSAPSessions")
 {
   m_socket = INVALID_SOCKET;
 }
@@ -340,7 +344,7 @@ bool CSAPSessions::ParseAnnounce(char* data, int len)
       }
 
       // should be improved in the case of sdp
-      it->timeout = CTimeUtils::GetTimeMS() + 60*60*1000;
+      it->timeout = XbmcThreads::SystemClockMillis() + 60*60*1000;
       return true;
     }
   }
@@ -367,7 +371,7 @@ bool CSAPSessions::ParseAnnounce(char* data, int len)
   session.payload_type   = header.payload_type;
   session.payload_origin = desc.origin;
   session.payload.assign(data, len);
-  session.timeout = CTimeUtils::GetTimeMS() + 60*60*1000;
+  session.timeout = XbmcThreads::SystemClockMillis() + 60*60*1000;
   m_sessions.push_back(session);
 
   CGUIMessage message(GUI_MSG_NOTIFY_ALL, 0, 0, GUI_MSG_UPDATE_PATH);
@@ -485,7 +489,7 @@ namespace XFILE
 
     CSingleLock lock(g_sapsessions.m_section);
 
-    if(g_sapsessions.ThreadHandle() == NULL)
+    if(!g_sapsessions.IsRunning())
       g_sapsessions.Create();
 
     // check if we can find this session in our cache
@@ -519,7 +523,7 @@ namespace XFILE
         item->SetLabel2(desc.info);
       item->SetLabelPreformated(true);
 
-      item->m_strPath = it->path;
+      item->SetPath(it->path);
       items.Add(item);
     }
 

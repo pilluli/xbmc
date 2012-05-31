@@ -22,6 +22,7 @@
  */
 
 #include "DownloadQueue.h"
+#include "system.h"
 
 #define MAX_DOWNLOAD_QUEUES  3
 
@@ -44,7 +45,7 @@ protected:
   typedef std::vector<CDownloadQueue*> QUEUEPOOL;
   QUEUEPOOL m_queues;
 
-  CRITICAL_SECTION m_critical;
+  CCriticalSection m_critical;
 };
 
 // Single global instance of class is in cpp file

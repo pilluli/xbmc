@@ -37,12 +37,14 @@ class CGUIInfoBool
 {
 public:
   CGUIInfoBool(bool value = false);
+  virtual ~CGUIInfoBool();
+
   operator bool() const { return m_value; };
 
-  void Update(int parentID = 0, const CGUIListItem *item = NULL);
-  void Parse(const CStdString &info);
+  void Update(const CGUIListItem *item = NULL);
+  void Parse(const CStdString &expression, int context);
 private:
-  int m_info;
+  unsigned int m_info;
   bool m_value;
 };
 
@@ -58,7 +60,7 @@ public:
   operator color_t() const { return m_color; };
 
   bool Update();
-  void Parse(const CStdString &label);
+  void Parse(const CStdString &label, int context);
 
 private:
   color_t GetColor() const;
@@ -70,11 +72,11 @@ class CGUIInfoLabel
 {
 public:
   CGUIInfoLabel();
-  CGUIInfoLabel(const CStdString &label, const CStdString &fallback = "");
+  CGUIInfoLabel(const CStdString &label, const CStdString &fallback = "", int context = 0);
 
-  void SetLabel(const CStdString &label, const CStdString &fallback);
-  CStdString GetLabel(int contextWindow, bool preferImage = false) const;
-  CStdString GetItemLabel(const CGUIListItem *item, bool preferImage = false) const;
+  void SetLabel(const CStdString &label, const CStdString &fallback, int context = 0);
+  CStdString GetLabel(int contextWindow, bool preferImage = false, CStdString *fallback = NULL) const;
+  CStdString GetItemLabel(const CGUIListItem *item, bool preferImage = false, CStdString *fallback = NULL) const;
   bool IsConstant() const;
   bool IsEmpty() const;
 
@@ -97,7 +99,7 @@ public:
   static CStdString ReplaceAddonStrings(const CStdString &label);
 
 private:
-  void Parse(const CStdString &label);
+  void Parse(const CStdString &label, int context);
 
   class CInfoPortion
   {

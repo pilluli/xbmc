@@ -26,6 +26,9 @@
 #include "DllAvCodec.h"
 #include "DllAvUtil.h"
 
+#include "threads/CriticalSection.h"
+#include "threads/SystemClock.h"
+
 class CDVDDemuxFFmpeg;
 
 class CDemuxStreamVideoFFmpeg
@@ -95,7 +98,7 @@ public:
   DemuxPacket* Read();
 
   bool SeekTime(int time, bool backwords = false, double* startpts = NULL);
-  bool SeekByte(__int64 pos);
+  bool SeekByte(int64_t pos);
   int GetStreamLength();
   CDemuxStream* GetStream(int iStreamId);
   int GetNrOfStreams();
@@ -117,17 +120,15 @@ protected:
 
   int ReadFrame(AVPacket *packet);
   void AddStream(int iId);
-  void Lock()   { EnterCriticalSection(&m_critSection); }
-  void Unlock() { LeaveCriticalSection(&m_critSection); }
 
   double ConvertTimestamp(int64_t pts, int den, int num);
   void UpdateCurrentPTS();
 
-  CRITICAL_SECTION m_critSection;
+  CCriticalSection m_critSection;
   #define MAX_STREAMS 100
   CDemuxStream* m_streams[MAX_STREAMS]; // maximum number of streams that ffmpeg can handle
 
-  ByteIOContext* m_ioContext;
+  AVIOContext* m_ioContext;
 
   DllAvFormat m_dllAvFormat;
   DllAvCodec  m_dllAvCodec;
@@ -138,7 +139,7 @@ protected:
   bool     m_bAVI;
   int      m_speed;
   unsigned m_program;
-  DWORD    m_timeout;
+  XbmcThreads::EndTime  m_timeout;
 
   CDVDInputStream* m_pInput;
 };

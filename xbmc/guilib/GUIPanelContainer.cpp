@@ -26,8 +26,8 @@
 
 using namespace std;
 
-CGUIPanelContainer::CGUIPanelContainer(int parentID, int controlID, float posX, float posY, float width, float height, ORIENTATION orientation, int scrollTime, int preloadItems)
-    : CGUIBaseContainer(parentID, controlID, posX, posY, width, height, orientation, scrollTime, preloadItems)
+CGUIPanelContainer::CGUIPanelContainer(int parentID, int controlID, float posX, float posY, float width, float height, ORIENTATION orientation, const CScroller& scroller, int preloadItems)
+    : CGUIBaseContainer(parentID, controlID, posX, posY, width, height, orientation, scroller, preloadItems)
 {
   ControlType = GUICONTAINER_PANEL;
   m_type = VIEW_TYPE_ICON;
@@ -49,7 +49,7 @@ void CGUIPanelContainer::Process(unsigned int currentTime, CDirtyRegionList &dir
 
   UpdateScrollOffset(currentTime);
 
-  int offset = (int)(m_scrollOffset / m_layout->Size(m_orientation));
+  int offset = (int)(m_scroller.GetValue() / m_layout->Size(m_orientation));
 
   int cacheBefore, cacheAfter;
   GetCacheOffsets(cacheBefore, cacheAfter);
@@ -60,7 +60,7 @@ void CGUIPanelContainer::Process(unsigned int currentTime, CDirtyRegionList &dir
   CPoint origin = CPoint(m_posX, m_posY) + m_renderOffset;
   float pos = (m_orientation == VERTICAL) ? origin.y : origin.x;
   float end = (m_orientation == VERTICAL) ? m_posY + m_height : m_posX + m_width;
-  pos += (offset - cacheBefore) * m_layout->Size(m_orientation) - m_scrollOffset;
+  pos += (offset - cacheBefore) * m_layout->Size(m_orientation) - m_scroller.GetValue();
   end += cacheAfter * m_layout->Size(m_orientation);
 
   int current = (offset - cacheBefore) * m_itemsPerRow;
@@ -100,7 +100,7 @@ void CGUIPanelContainer::Render()
 {
   if (!m_layout || !m_focusedLayout) return;
 
-  int offset = (int)(m_scrollOffset / m_layout->Size(m_orientation));
+  int offset = (int)(m_scroller.GetValue() / m_layout->Size(m_orientation));
 
   int cacheBefore, cacheAfter;
   GetCacheOffsets(cacheBefore, cacheAfter);
@@ -108,62 +108,63 @@ void CGUIPanelContainer::Render()
   // Free memory not used on screen at the moment, do this first so there's more memory for the new items.
   FreeMemory(CorrectOffset(offset - cacheBefore, 0), CorrectOffset(offset + cacheAfter + m_itemsPerPage + 1, 0));
 
-  g_graphicsContext.SetClipRegion(m_posX, m_posY, m_width, m_height);
-  CPoint origin = CPoint(m_posX, m_posY) + m_renderOffset;
-  float pos = (m_orientation == VERTICAL) ? origin.y : origin.x;
-  float end = (m_orientation == VERTICAL) ? m_posY + m_height : m_posX + m_width;
-  pos += (offset - cacheBefore) * m_layout->Size(m_orientation) - m_scrollOffset;
-  end += cacheAfter * m_layout->Size(m_orientation);
-
-  float focusedPos = 0;
-  int focusedCol = 0;
-  CGUIListItemPtr focusedItem;
-  int current = (offset - cacheBefore) * m_itemsPerRow;
-  int col = 0;
-  while (pos < end && m_items.size())
+  if (g_graphicsContext.SetClipRegion(m_posX, m_posY, m_width, m_height))
   {
-    if (current >= (int)m_items.size())
-      break;
-    if (current >= 0)
+    CPoint origin = CPoint(m_posX, m_posY) + m_renderOffset;
+    float pos = (m_orientation == VERTICAL) ? origin.y : origin.x;
+    float end = (m_orientation == VERTICAL) ? m_posY + m_height : m_posX + m_width;
+    pos += (offset - cacheBefore) * m_layout->Size(m_orientation) - m_scroller.GetValue();
+    end += cacheAfter * m_layout->Size(m_orientation);
+
+    float focusedPos = 0;
+    int focusedCol = 0;
+    CGUIListItemPtr focusedItem;
+    int current = (offset - cacheBefore) * m_itemsPerRow;
+    int col = 0;
+    while (pos < end && m_items.size())
     {
-      CGUIListItemPtr item = m_items[current];
-      bool focused = (current == GetOffset() * m_itemsPerRow + GetCursor()) && m_bHasFocus;
-      // render our item
-      if (focused)
+      if (current >= (int)m_items.size())
+        break;
+      if (current >= 0)
       {
-        focusedPos = pos;
-        focusedCol = col;
-        focusedItem = item;
+        CGUIListItemPtr item = m_items[current];
+        bool focused = (current == GetOffset() * m_itemsPerRow + GetCursor()) && m_bHasFocus;
+        // render our item
+        if (focused)
+        {
+          focusedPos = pos;
+          focusedCol = col;
+          focusedItem = item;
+        }
+        else
+        {
+          if (m_orientation == VERTICAL)
+            RenderItem(origin.x + col * m_layout->Size(HORIZONTAL), pos, item.get(), false);
+          else
+            RenderItem(pos, origin.y + col * m_layout->Size(VERTICAL), item.get(), false);
+        }
       }
+      // increment our position
+      if (col < m_itemsPerRow - 1)
+        col++;
       else
       {
-        if (m_orientation == VERTICAL)
-          RenderItem(origin.x + col * m_layout->Size(HORIZONTAL), pos, item.get(), false);
-        else
-          RenderItem(pos, origin.y + col * m_layout->Size(VERTICAL), item.get(), false);
+        pos += m_layout->Size(m_orientation);
+        col = 0;
       }
+      current++;
     }
-    // increment our position
-    if (col < m_itemsPerRow - 1)
-      col++;
-    else
+    // and render the focused item last (for overlapping purposes)
+    if (focusedItem)
     {
-      pos += m_layout->Size(m_orientation);
-      col = 0;
+      if (m_orientation == VERTICAL)
+        RenderItem(origin.x + focusedCol * m_layout->Size(HORIZONTAL), focusedPos, focusedItem.get(), true);
+      else
+        RenderItem(focusedPos, origin.y + focusedCol * m_layout->Size(VERTICAL), focusedItem.get(), true);
     }
-    current++;
-  }
-  // and render the focused item last (for overlapping purposes)
-  if (focusedItem)
-  {
-    if (m_orientation == VERTICAL)
-      RenderItem(origin.x + focusedCol * m_layout->Size(HORIZONTAL), focusedPos, focusedItem.get(), true);
-    else
-      RenderItem(focusedPos, origin.y + focusedCol * m_layout->Size(VERTICAL), focusedItem.get(), true);
-  }
 
-  g_graphicsContext.RestoreClipRegion();
-
+    g_graphicsContext.RestoreClipRegion();
+  }
   CGUIControl::Render();
 }
 
@@ -257,7 +258,7 @@ bool CGUIPanelContainer::OnMessage(CGUIMessage& message)
 
 void CGUIPanelContainer::OnLeft()
 {
-  bool wrapAround = m_controlLeft == GetID() || !(m_controlLeft || m_leftActions.size());
+  bool wrapAround = m_actionLeft.GetNavigation() == GetID() || !m_actionLeft.HasActionsMeetingCondition();
   if (m_orientation == VERTICAL && MoveLeft(wrapAround))
     return;
   if (m_orientation == HORIZONTAL && MoveUp(wrapAround))
@@ -267,7 +268,7 @@ void CGUIPanelContainer::OnLeft()
 
 void CGUIPanelContainer::OnRight()
 {
-  bool wrapAround = m_controlRight == GetID() || !(m_controlRight || m_rightActions.size());
+  bool wrapAround = m_actionRight.GetNavigation() == GetID() || !m_actionRight.HasActionsMeetingCondition();
   if (m_orientation == VERTICAL && MoveRight(wrapAround))
     return;
   if (m_orientation == HORIZONTAL && MoveDown(wrapAround))
@@ -277,7 +278,7 @@ void CGUIPanelContainer::OnRight()
 
 void CGUIPanelContainer::OnUp()
 {
-  bool wrapAround = m_controlUp == GetID() || !(m_controlUp || m_upActions.size());
+  bool wrapAround = m_actionUp.GetNavigation() == GetID() || !m_actionUp.HasActionsMeetingCondition();
   if (m_orientation == VERTICAL && MoveUp(wrapAround))
     return;
   if (m_orientation == HORIZONTAL && MoveLeft(wrapAround))
@@ -287,7 +288,7 @@ void CGUIPanelContainer::OnUp()
 
 void CGUIPanelContainer::OnDown()
 {
-  bool wrapAround = m_controlDown == GetID() || !(m_controlDown || m_downActions.size());
+  bool wrapAround = m_actionDown.GetNavigation() == GetID() || !m_actionDown.HasActionsMeetingCondition();
   if (m_orientation == VERTICAL && MoveDown(wrapAround))
     return;
   if (m_orientation == HORIZONTAL && MoveRight(wrapAround))
@@ -351,7 +352,7 @@ bool CGUIPanelContainer::MoveLeft(bool wrapAround)
   { // wrap around
     SetCursor(GetCursor() + m_itemsPerRow - 1);
     if (GetOffset() * m_itemsPerRow + GetCursor() >= (int)m_items.size())
-      SetCursor((int)m_items.size() - GetOffset() * m_itemsPerRow);
+      SetCursor((int)m_items.size() - GetOffset() * m_itemsPerRow - 1);
   }
   else
     return false;
@@ -384,17 +385,19 @@ void CGUIPanelContainer::Scroll(int amount)
 }
 
 void CGUIPanelContainer::ValidateOffset()
-{ // first thing is we check the range of our offset
+{
   if (!m_layout) return;
-  if (GetOffset() > (int)GetRows() - m_itemsPerPage || m_scrollOffset > ((int)GetRows() - m_itemsPerPage) * m_layout->Size(m_orientation))
+  // first thing is we check the range of our offset
+  // don't validate offset if we are scrolling in case the tween image exceed <0, 1> range
+  if (GetOffset() > (int)GetRows() - m_itemsPerPage || (!m_scroller.IsScrolling() && m_scroller.GetValue() > ((int)GetRows() - m_itemsPerPage) * m_layout->Size(m_orientation)))
   {
     SetOffset(std::max(0, (int)GetRows() - m_itemsPerPage));
-    m_scrollOffset = GetOffset() * m_layout->Size(m_orientation);
+    m_scroller.SetValue(GetOffset() * m_layout->Size(m_orientation));
   }
-  if (GetOffset() < 0 || m_scrollOffset < 0)
+  if (GetOffset() < 0 || (!m_scroller.IsScrolling() && m_scroller.GetValue() < 0))
   {
     SetOffset(0);
-    m_scrollOffset = 0;
+    m_scroller.SetValue(0);
   }
 }
 
@@ -428,7 +431,7 @@ void CGUIPanelContainer::CalculateLayout()
   if (m_itemsPerPage < 1) m_itemsPerPage = 1;
 
   // ensure that the scroll offset is a multiple of our size
-  m_scrollOffset = GetOffset() * m_layout->Size(m_orientation);
+  m_scroller.SetValue(GetOffset() * m_layout->Size(m_orientation));
 }
 
 unsigned int CGUIPanelContainer::GetRows() const
@@ -470,7 +473,7 @@ int CGUIPanelContainer::GetCursorFromPoint(const CPoint &point, CPoint *itemPoin
     }
     posY -= sizeY;
   }
-  return false;
+  return -1;
 }
 
 bool CGUIPanelContainer::SelectItemFromPoint(const CPoint &point)

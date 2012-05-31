@@ -28,6 +28,7 @@
 #include "DVDStreamInfo.h"
 #include "DVDClock.h"
 #include "DVDCodecs/DVDCodecs.h"
+#include "DVDCodecs/DVDCodecUtils.h"
 #include "../../../../utils/Win32Exception.h"
 #if defined(_LINUX) || defined(_WIN32)
 #include "utils/CPUInfo.h"
@@ -36,6 +37,7 @@
 #include "settings/GUISettings.h"
 #include "utils/log.h"
 #include "boost/shared_ptr.hpp"
+#include "threads/Atomics.h"
 
 #ifndef _LINUX
 #define RINT(x) ((x) >= 0 ? ((int)((x) + 0.5)) : ((int)((x) - 0.5)))
@@ -45,6 +47,7 @@
 #endif
 
 #include "cores/VideoRenderers/RenderManager.h"
+#include "cores/VideoRenderers/RenderFormats.h"
 
 #ifdef HAVE_LIBVDPAU
 #include "VDPAU.h"
@@ -90,7 +93,7 @@ enum PixelFormat CDVDVideoCodecFFmpeg::GetFormat( struct AVCodecContext * avctx
   if(DXVA::CDecoder::Supports(*cur) && g_guiSettings.GetBool("videoplayer.usedxva2"))
   {
     DXVA::CDecoder* dec = new DXVA::CDecoder();
-    if(dec->Open(avctx, *cur))
+    if(dec->Open(avctx, *cur, ctx->m_uSurfacesCount))
     {
       ctx->SetHardware(dec);
       return *cur;
@@ -100,7 +103,9 @@ enum PixelFormat CDVDVideoCodecFFmpeg::GetFormat( struct AVCodecContext * avctx
   }
 #endif
 #ifdef HAVE_LIBVA
-    if(*cur == PIX_FMT_VAAPI_VLD && g_guiSettings.GetBool("videoplayer.usevaapi"))
+    // mpeg4 vaapi decoding is disabled
+    if(*cur == PIX_FMT_VAAPI_VLD && g_guiSettings.GetBool("videoplayer.usevaapi") 
+    && (avctx->codec_id != CODEC_ID_MPEG4 || g_advancedSettings.m_videoAllowMpeg4VAAPI)) 
     {
       VAAPI::CDecoder* dec = new VAAPI::CDecoder();
       if(dec->Open(avctx, *cur))
@@ -109,7 +114,7 @@ enum PixelFormat CDVDVideoCodecFFmpeg::GetFormat( struct AVCodecContext * avctx
         return *cur;
       }
       else
-        dec->Release();      
+        dec->Release();
     }
 #endif
     cur++;
@@ -117,29 +122,19 @@ enum PixelFormat CDVDVideoCodecFFmpeg::GetFormat( struct AVCodecContext * avctx
   return ctx->m_dllAvCodec.avcodec_default_get_format(avctx, fmt);
 }
 
-
-CDVDVideoCodecFFmpeg::IHardwareDecoder*  CDVDVideoCodecFFmpeg::IHardwareDecoder::Acquire()
-{
-  InterlockedIncrement(&m_references);
-  return this;
-}
-
-long CDVDVideoCodecFFmpeg::IHardwareDecoder::Release()
-{
-  long count = InterlockedDecrement(&m_references);
-  ASSERT(count >= 0);
-  if (count == 0) delete this;
-  return count;
-}
-
 CDVDVideoCodecFFmpeg::CDVDVideoCodecFFmpeg() : CDVDVideoCodec()
 {
   m_pCodecContext = NULL;
-  m_pConvertFrame = NULL;
   m_pFrame = NULL;
+  m_pFilterGraph  = NULL;
+  m_pFilterIn     = NULL;
+  m_pFilterOut    = NULL;
+  m_pBufferRef    = NULL;
 
   m_iPictureWidth = 0;
   m_iPictureHeight = 0;
+
+  m_uSurfacesCount = 0;
 
   m_iScreenWidth = 0;
   m_iScreenHeight = 0;
@@ -159,14 +154,44 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
 {
   AVCodec* pCodec;
 
-  if (!m_dllAvUtil.Load() || !m_dllAvCodec.Load() || !m_dllSwScale.Load()) return false;
+  if(!m_dllAvUtil.Load()
+  || !m_dllAvCodec.Load()
+  || !m_dllSwScale.Load()
+  || !m_dllAvFilter.Load()
+  ) return false;
 
   m_dllAvCodec.avcodec_register_all();
+  m_dllAvFilter.avfilter_register_all();
 
   m_bSoftware     = hints.software;
-  m_pCodecContext = m_dllAvCodec.avcodec_alloc_context();
+  m_iOrientation  = hints.orientation;
+
+  for(std::vector<ERenderFormat>::iterator it = options.m_formats.begin(); it != options.m_formats.end(); ++it)
+  {
+    m_formats.push_back((PixelFormat)CDVDCodecUtils::PixfmtFromEFormat(*it));
+    if(*it == RENDER_FMT_YUV420P)
+      m_formats.push_back(PIX_FMT_YUVJ420P);
+  }
+  m_formats.push_back(PIX_FMT_NONE); /* always add none to get a terminated list in ffmpeg world */
 
   pCodec = NULL;
+  m_pCodecContext = NULL;
+
+  if (hints.codec == CODEC_ID_H264)
+  {
+    switch(hints.profile)
+    {
+      case FF_PROFILE_H264_HIGH_10:
+      case FF_PROFILE_H264_HIGH_10_INTRA:
+      case FF_PROFILE_H264_HIGH_422:
+      case FF_PROFILE_H264_HIGH_422_INTRA:
+      case FF_PROFILE_H264_HIGH_444_PREDICTIVE:
+      case FF_PROFILE_H264_HIGH_444_INTRA:
+      case FF_PROFILE_H264_CAVLC_444:
+      m_bSoftware = true;
+      break;
+    }
+  }
 
 #ifdef HAVE_LIBVDPAU
   if(g_guiSettings.GetBool("videoplayer.usevdpau") && !m_bSoftware)
@@ -181,16 +206,19 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
 
         CLog::Log(LOGNOTICE,"CDVDVideoCodecFFmpeg::Open() Creating VDPAU(%ix%i, %d)",hints.width, hints.height, hints.codec);
         CVDPAU* vdp = new CVDPAU();
+        m_pCodecContext = m_dllAvCodec.avcodec_alloc_context3(pCodec);
         m_pCodecContext->codec_id = hints.codec;
         m_pCodecContext->width    = hints.width;
         m_pCodecContext->height   = hints.height;
+        m_pCodecContext->coded_width   = hints.width;
+        m_pCodecContext->coded_height  = hints.height;
         if(vdp->Open(m_pCodecContext, pCodec->pix_fmts ? pCodec->pix_fmts[0] : PIX_FMT_NONE))
         {
           m_pHardware = vdp;
           m_pCodecContext->codec_id = CODEC_ID_NONE; // ffmpeg will complain if this has been set
           break;
         }
-        m_pCodecContext->codec_id = CODEC_ID_NONE; // ffmpeg will complain if this has been set
+        m_dllAvUtil.av_freep(&m_pCodecContext);
         CLog::Log(LOGNOTICE,"CDVDVideoCodecFFmpeg::Open() Failed to get VDPAU device");
         vdp->Release();
       }
@@ -209,21 +237,26 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
 
   CLog::Log(LOGNOTICE,"CDVDVideoCodecFFmpeg::Open() Using codec: %s",pCodec->long_name ? pCodec->long_name : pCodec->name);
 
+  if(m_pCodecContext == NULL)
+    m_pCodecContext = m_dllAvCodec.avcodec_alloc_context3(pCodec);
+
   m_pCodecContext->opaque = (void*)this;
   m_pCodecContext->debug_mv = 0;
   m_pCodecContext->debug = 0;
   m_pCodecContext->workaround_bugs = FF_BUG_AUTODETECT;
   m_pCodecContext->get_format = GetFormat;
   m_pCodecContext->codec_tag = hints.codec_tag;
+  /* Only allow slice threading, since frame threading is more
+   * sensitive to changes in frame sizes, and it causes crashes
+   * during HW accell */
+  m_pCodecContext->thread_type = FF_THREAD_SLICE;
 
 #if defined(__APPLE__) && defined(__arm__)
   // ffmpeg with enabled neon will crash and burn if this is enabled
   m_pCodecContext->flags &= CODEC_FLAG_EMU_EDGE;
 #else
   if (pCodec->id != CODEC_ID_H264 && pCodec->capabilities & CODEC_CAP_DR1
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(52,69,0)
       && pCodec->id != CODEC_ID_VP8
-#endif
      )
     m_pCodecContext->flags |= CODEC_FLAG_EMU_EDGE;
 #endif
@@ -250,22 +283,21 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   }
 
   // set any special options
-  for(CDVDCodecOptions::iterator it = options.begin(); it != options.end(); it++)
+  for(std::vector<CDVDCodecOption>::iterator it = options.m_keys.begin(); it != options.m_keys.end(); it++)
   {
-    m_dllAvUtil.av_set_string3(m_pCodecContext, it->m_name.c_str(), it->m_value.c_str(), 0, NULL);
+    if (it->m_name == "surfaces")
+      m_uSurfacesCount = std::atoi(it->m_value.c_str());
+    else
+      m_dllAvUtil.av_opt_set(m_pCodecContext, it->m_name.c_str(), it->m_value.c_str(), 0);
   }
 
-#if defined(__APPLE__) && defined(__arm__)
-  m_dllAvCodec.avcodec_thread_init(m_pCodecContext, 1);
-#elif defined(_LINUX) || defined(_WIN32)
   int num_threads = std::min(8 /*MAX_THREADS*/, g_cpuInfo.getCPUCount());
   if( num_threads > 1 && !hints.software && m_pHardware == NULL // thumbnail extraction fails when run threaded
   && ( pCodec->id == CODEC_ID_H264
     || pCodec->id == CODEC_ID_MPEG4 ))
-    m_dllAvCodec.avcodec_thread_init(m_pCodecContext, num_threads);
-#endif
+    m_pCodecContext->thread_count = num_threads;
 
-  if (m_dllAvCodec.avcodec_open(m_pCodecContext, pCodec) < 0)
+  if (m_dllAvCodec.avcodec_open2(m_pCodecContext, pCodec, NULL) < 0)
   {
     CLog::Log(LOGDEBUG,"CDVDVideoCodecFFmpeg::Open() Unable to open codec");
     return false;
@@ -274,14 +306,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   m_pFrame = m_dllAvCodec.avcodec_alloc_frame();
   if (!m_pFrame) return false;
 
-  if(pCodec->name)
-    m_name = CStdString("ff-") + pCodec->name;
-  else
-    m_name = "ffmpeg";
-
-  if(m_pHardware)
-    m_name += "-" + m_pHardware->Name();
-
+  UpdateName();
   return true;
 }
 
@@ -289,13 +314,6 @@ void CDVDVideoCodecFFmpeg::Dispose()
 {
   if (m_pFrame) m_dllAvUtil.av_free(m_pFrame);
   m_pFrame = NULL;
-
-  if (m_pConvertFrame)
-  {
-    m_dllAvCodec.avpicture_free(m_pConvertFrame);
-    m_dllAvUtil.av_free(m_pConvertFrame);
-  }
-  m_pConvertFrame = NULL;
 
   if (m_pCodecContext)
   {
@@ -311,8 +329,11 @@ void CDVDVideoCodecFFmpeg::Dispose()
   }
   SAFE_RELEASE(m_pHardware);
 
+  FilterClose();
+
   m_dllAvCodec.Unload();
   m_dllAvUtil.Unload();
+  m_dllAvFilter.Unload();
 }
 
 void CDVDVideoCodecFFmpeg::SetDropState(bool bDrop)
@@ -326,22 +347,40 @@ void CDVDVideoCodecFFmpeg::SetDropState(bool bDrop)
     //  2 seem to be to high.. it causes video to be ruined on following images
     if( bDrop )
     {
-      // TODO: 'hurry_up' has been deprecated in favor of the skip_* variables
-      // Use those instead.
-
-      //m_pCodecContext->hurry_up = 1;
       m_pCodecContext->skip_frame = AVDISCARD_NONREF;
       m_pCodecContext->skip_idct = AVDISCARD_NONREF;
       m_pCodecContext->skip_loop_filter = AVDISCARD_NONREF;
     }
     else
     {
-      //m_pCodecContext->hurry_up = 0;
       m_pCodecContext->skip_frame = AVDISCARD_DEFAULT;
       m_pCodecContext->skip_idct = AVDISCARD_DEFAULT;
       m_pCodecContext->skip_loop_filter = AVDISCARD_DEFAULT;
     }
   }
+}
+
+unsigned int CDVDVideoCodecFFmpeg::SetFilters(unsigned int flags)
+{
+  m_filters_next.Empty();
+
+  if(m_pHardware)
+    return 0;
+
+  if(flags & FILTER_DEINTERLACE_YADIF)
+  {
+    if(flags & FILTER_DEINTERLACE_HALFED)
+      m_filters_next = "yadif=0:-1";
+    else
+      m_filters_next = "yadif=1:-1";
+
+    if(flags & FILTER_DEINTERLACE_FLAGGED)
+      m_filters_next += ":1";
+
+    flags &= ~FILTER_DEINTERLACE_ANY | FILTER_DEINTERLACE_YADIF;
+  }
+
+  return flags;
 }
 
 union pts_union
@@ -391,6 +430,15 @@ int CDVDVideoCodecFFmpeg::Decode(BYTE* pData, int iSize, double dts, double pts)
       return result;
   }
 
+  if(m_pFilterGraph)
+  {
+    int result = 0;
+    if(pData == NULL)
+      result = FilterProcess(NULL);
+    if(result)
+      return result;
+  }
+
   m_dts = dts;
   m_pCodecContext->reordered_opaque = pts_dtoi(pts);
 
@@ -403,8 +451,8 @@ int CDVDVideoCodecFFmpeg::Decode(BYTE* pData, int iSize, double dts, double pts)
   avpkt.flags = AV_PKT_FLAG_KEY;
   len = m_dllAvCodec.avcodec_decode_video2(m_pCodecContext, m_pFrame, &iGotPicture, &avpkt);
 
-  if(m_iLastKeyframe < m_pCodecContext->has_b_frames + 1)
-    m_iLastKeyframe = m_pCodecContext->has_b_frames + 1;
+  if(m_iLastKeyframe < m_pCodecContext->has_b_frames + 2)
+    m_iLastKeyframe = m_pCodecContext->has_b_frames + 2;
 
   if (len < 0)
   {
@@ -412,76 +460,56 @@ int CDVDVideoCodecFFmpeg::Decode(BYTE* pData, int iSize, double dts, double pts)
     return VC_ERROR;
   }
 
-  if (len != iSize && m_pCodecContext->skip_frame != AVDISCARD_NONREF)
-    CLog::Log(LOGWARNING, "%s - avcodec_decode_video didn't consume the full packet. size: %d, consumed: %d", __FUNCTION__, iSize, len);
-
   if (!iGotPicture)
     return VC_BUFFER;
 
   if(m_pFrame->key_frame)
   {
     m_started = true;
-    m_iLastKeyframe = m_pCodecContext->has_b_frames + 1;
+    m_iLastKeyframe = m_pCodecContext->has_b_frames + 2;
   }
 
-  if(m_pCodecContext->pix_fmt != PIX_FMT_YUV420P
-  && m_pCodecContext->pix_fmt != PIX_FMT_YUVJ420P
-  && m_pHardware == NULL)
-  {
-    if (!m_dllSwScale.IsLoaded() && !m_dllSwScale.Load())
-        return VC_ERROR;
+  /* put a limit on convergence count to avoid huge mem usage on streams without keyframes */
+  if(m_iLastKeyframe > 300)
+    m_iLastKeyframe = 300;
 
-    if (!m_pConvertFrame)
+  /* h264 doesn't always have keyframes + won't output before first keyframe anyway */
+  if(m_pCodecContext->codec_id == CODEC_ID_H264)
+    m_started = true;
+
+  if(m_pHardware == NULL)
+  {
+    bool need_scale = std::find( m_formats.begin()
+                               , m_formats.end()
+                               , m_pCodecContext->pix_fmt) == m_formats.end();
+
+    bool need_reopen  = false;
+    if(!m_filters.Equals(m_filters_next))
+      need_reopen = true;
+
+    if(m_pFilterIn)
     {
-      // Allocate an AVFrame structure
-      m_pConvertFrame = (AVPicture*)m_dllAvUtil.av_mallocz(sizeof(AVPicture));
-      // Due to a bug in swsscale we need to allocate one extra line of data
-      if(m_dllAvCodec.avpicture_alloc( m_pConvertFrame
-                                     , PIX_FMT_YUV420P
-                                     , m_pCodecContext->width
-                                     , m_pCodecContext->height+1) < 0)
-      {
-        m_dllAvUtil.av_free(m_pConvertFrame);
-        m_pConvertFrame = NULL;
-        return VC_ERROR;
-      }
+      if(m_pFilterIn->outputs[0]->format != m_pCodecContext->pix_fmt
+      || m_pFilterIn->outputs[0]->w      != m_pCodecContext->width
+      || m_pFilterIn->outputs[0]->h      != m_pCodecContext->height)
+        need_reopen = true;
     }
 
-    // convert the picture
-    struct SwsContext *context = m_dllSwScale.sws_getContext(m_pCodecContext->width, m_pCodecContext->height,
-                                         m_pCodecContext->pix_fmt, m_pCodecContext->width, m_pCodecContext->height,
-                                         PIX_FMT_YUV420P, SWS_FAST_BILINEAR | SwScaleCPUFlags(), NULL, NULL, NULL);
-
-    if(context == NULL)
+    // try to setup new filters
+    if (need_reopen || (need_scale && m_pFilterGraph == NULL))
     {
-      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Decode - unable to obtain sws context for w:%i, h:%i, pixfmt: %i", m_pCodecContext->width, m_pCodecContext->height, m_pCodecContext->pix_fmt);
-      return VC_ERROR;
-    }
+      m_filters = m_filters_next;
 
-    m_dllSwScale.sws_scale(context
-                          , m_pFrame->data
-                          , m_pFrame->linesize
-                          , 0
-                          , m_pCodecContext->height
-                          , m_pConvertFrame->data
-                          , m_pConvertFrame->linesize);
-
-    m_dllSwScale.sws_freeContext(context);
-  }
-  else
-  {
-    // no need to convert, just free any existing convert buffers
-    if (m_pConvertFrame)
-    {
-      m_dllAvCodec.avpicture_free(m_pConvertFrame);
-      m_dllAvUtil.av_free(m_pConvertFrame);
-      m_pConvertFrame = NULL;
+      if(FilterOpen(m_filters, need_scale) < 0)
+        FilterClose();
     }
   }
 
   int result;
   if(m_pHardware)
     result = m_pHardware->Decode(m_pCodecContext, m_pFrame);
+  else if(m_pFilterGraph)
+    result = FilterProcess(m_pFrame);
   else
     result = VC_PICTURE | VC_BUFFER;
 
@@ -500,29 +528,54 @@ void CDVDVideoCodecFFmpeg::Reset()
   if (m_pHardware)
     m_pHardware->Reset();
 
-  if (m_pConvertFrame)
-  {
-    delete[] m_pConvertFrame->data[0];
-    m_dllAvUtil.av_free(m_pConvertFrame);
-    m_pConvertFrame = NULL;
-  }
+  m_filters = "";
+  FilterClose();
 }
 
 bool CDVDVideoCodecFFmpeg::GetPictureCommon(DVDVideoPicture* pDvdVideoPicture)
 {
-  GetVideoAspect(m_pCodecContext, pDvdVideoPicture->iDisplayWidth, pDvdVideoPicture->iDisplayHeight);
+  pDvdVideoPicture->iWidth = m_pCodecContext->width;
+  pDvdVideoPicture->iHeight = m_pCodecContext->height;
 
-  if(m_pCodecContext->coded_width  && m_pCodecContext->coded_width  < m_pCodecContext->width
-                                   && m_pCodecContext->coded_width  > m_pCodecContext->width  - 10)
+  if(m_pBufferRef)
+  {
+    pDvdVideoPicture->iWidth  = m_pBufferRef->video->w;
+    pDvdVideoPicture->iHeight = m_pBufferRef->video->h;
+  }
+
+  /* crop of 10 pixels if demuxer asked it */
+  if(m_pCodecContext->coded_width  && m_pCodecContext->coded_width  < (int)pDvdVideoPicture->iWidth
+                                   && m_pCodecContext->coded_width  > (int)pDvdVideoPicture->iWidth  - 10)
     pDvdVideoPicture->iWidth = m_pCodecContext->coded_width;
-  else
-    pDvdVideoPicture->iWidth = m_pCodecContext->width;
 
-  if(m_pCodecContext->coded_height && m_pCodecContext->coded_height < m_pCodecContext->height
-                                   && m_pCodecContext->coded_height > m_pCodecContext->height - 10)
+  if(m_pCodecContext->coded_height && m_pCodecContext->coded_height < (int)pDvdVideoPicture->iHeight
+                                   && m_pCodecContext->coded_height > (int)pDvdVideoPicture->iHeight - 10)
     pDvdVideoPicture->iHeight = m_pCodecContext->coded_height;
+
+  double aspect_ratio;
+
+  /* use variable in the frame */
+  AVRational pixel_aspect = m_pCodecContext->sample_aspect_ratio;
+  if (m_pBufferRef)
+    pixel_aspect = m_pBufferRef->video->sample_aspect_ratio;
+
+  if (pixel_aspect.num == 0)
+    aspect_ratio = 0;
   else
-    pDvdVideoPicture->iHeight = m_pCodecContext->height;
+    aspect_ratio = av_q2d(pixel_aspect) * pDvdVideoPicture->iWidth / pDvdVideoPicture->iHeight;
+
+  if (aspect_ratio <= 0.0)
+    aspect_ratio = (float)pDvdVideoPicture->iWidth / (float)pDvdVideoPicture->iHeight;
+
+  /* XXX: we suppose the screen has a 1.0 pixel ratio */ // CDVDVideo will compensate it.
+  pDvdVideoPicture->iDisplayHeight = pDvdVideoPicture->iHeight;
+  pDvdVideoPicture->iDisplayWidth  = ((int)RINT(pDvdVideoPicture->iHeight * aspect_ratio)) & -3;
+  if (pDvdVideoPicture->iDisplayWidth > pDvdVideoPicture->iWidth)
+  {
+    pDvdVideoPicture->iDisplayWidth  = pDvdVideoPicture->iWidth;
+    pDvdVideoPicture->iDisplayHeight = ((int)RINT(pDvdVideoPicture->iWidth / aspect_ratio)) & -3;
+  }
+
 
   pDvdVideoPicture->pts = DVD_NOPTS_VALUE;
 
@@ -533,8 +586,15 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(DVDVideoPicture* pDvdVideoPicture)
   pDvdVideoPicture->iFlags = DVP_FLAG_ALLOCATED;
   pDvdVideoPicture->iFlags |= m_pFrame->interlaced_frame ? DVP_FLAG_INTERLACED : 0;
   pDvdVideoPicture->iFlags |= m_pFrame->top_field_first ? DVP_FLAG_TOP_FIELD_FIRST: 0;
-  if(m_pCodecContext->pix_fmt == PIX_FMT_YUVJ420P)
+
+  pDvdVideoPicture->chroma_position = m_pCodecContext->chroma_sample_location;
+  pDvdVideoPicture->color_primaries = m_pCodecContext->color_primaries;
+  pDvdVideoPicture->color_transfer = m_pCodecContext->color_trc;
+  if(m_pCodecContext->color_range == AVCOL_RANGE_JPEG
+  || m_pCodecContext->pix_fmt     == PIX_FMT_YUVJ420P)
     pDvdVideoPicture->color_range = 1;
+  else
+    pDvdVideoPicture->color_range = 0;
 
   pDvdVideoPicture->qscale_table = m_pFrame->qscale_table;
   pDvdVideoPicture->qscale_stride = m_pFrame->qstride;
@@ -574,14 +634,6 @@ bool CDVDVideoCodecFFmpeg::GetPicture(DVDVideoPicture* pDvdVideoPicture)
   if(!GetPictureCommon(pDvdVideoPicture))
     return false;
 
-  if(m_pConvertFrame)
-  {
-    for (int i = 0; i < 4; i++)
-      pDvdVideoPicture->data[i]      = m_pConvertFrame->data[i];
-    for (int i = 0; i < 4; i++)
-      pDvdVideoPicture->iLineSize[i] = m_pConvertFrame->linesize[i];
-  }
-  else
   {
     for (int i = 0; i < 4; i++)
       pDvdVideoPicture->data[i]      = m_pFrame->data[i];
@@ -590,32 +642,189 @@ bool CDVDVideoCodecFFmpeg::GetPicture(DVDVideoPicture* pDvdVideoPicture)
   }
 
   pDvdVideoPicture->iFlags |= pDvdVideoPicture->data[0] ? 0 : DVP_FLAG_DROPPED;
-  pDvdVideoPicture->format = DVDVideoPicture::FMT_YUV420P;
+  pDvdVideoPicture->extended_format = 0;
 
+  PixelFormat pix_fmt;
+  if(m_pBufferRef)
+    pix_fmt = (PixelFormat)m_pBufferRef->format;
+  else
+    pix_fmt = m_pCodecContext->pix_fmt;
+
+  pDvdVideoPicture->format = CDVDCodecUtils::EFormatFromPixfmt(pix_fmt);
   return true;
 }
 
-/*
- * Calculate the height and width this video should be displayed in
- */
-void CDVDVideoCodecFFmpeg::GetVideoAspect(AVCodecContext* pCodecContext, unsigned int& iWidth, unsigned int& iHeight)
+int CDVDVideoCodecFFmpeg::FilterOpen(const CStdString& filters, bool scale)
 {
-  double aspect_ratio;
+  int result;
+  AVBufferSinkParams *buffersink_params;
 
-  /* XXX: use variable in the frame */
-  if (pCodecContext->sample_aspect_ratio.num == 0) aspect_ratio = 0;
-  else aspect_ratio = av_q2d(pCodecContext->sample_aspect_ratio) * pCodecContext->width / pCodecContext->height;
+  if (m_pFilterGraph)
+    FilterClose();
 
-  if (aspect_ratio <= 0.0) aspect_ratio = (float)pCodecContext->width / (float)pCodecContext->height;
+  if (filters.IsEmpty() && !scale)
+    return 0;
 
-  /* XXX: we suppose the screen has a 1.0 pixel ratio */ // CDVDVideo will compensate it.
-  iHeight = pCodecContext->height;
-  iWidth = ((int)RINT(pCodecContext->height * aspect_ratio)) & -3;
-  if (iWidth > (unsigned int)pCodecContext->width)
+  if (m_pHardware)
   {
-    iWidth = pCodecContext->width;
-    iHeight = ((int)RINT(pCodecContext->width / aspect_ratio)) & -3;
+    CLog::Log(LOGWARNING, "CDVDVideoCodecFFmpeg::FilterOpen - skipped opening filters on hardware decode");
+    return 0;
   }
+
+  if (!(m_pFilterGraph = m_dllAvFilter.avfilter_graph_alloc()))
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - unable to alloc filter graph");
+    return -1;
+  }
+
+  AVFilter* srcFilter = m_dllAvFilter.avfilter_get_by_name("buffer");
+  AVFilter* outFilter = m_dllAvFilter.avfilter_get_by_name("buffersink"); // should be last filter in the graph for now
+
+  CStdString args;
+
+  args.Format("%d:%d:%d:%d:%d:%d:%d",
+    m_pCodecContext->width,
+    m_pCodecContext->height,
+    m_pCodecContext->pix_fmt,
+    m_pCodecContext->time_base.num,
+    m_pCodecContext->time_base.den,
+    m_pCodecContext->sample_aspect_ratio.num,
+    m_pCodecContext->sample_aspect_ratio.den);
+
+  if ((result = m_dllAvFilter.avfilter_graph_create_filter(&m_pFilterIn, srcFilter, "src", args, NULL, m_pFilterGraph)) < 0)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - avfilter_graph_create_filter: src");
+    return result;
+  }
+
+  buffersink_params = m_dllAvFilter.av_buffersink_params_alloc();
+  buffersink_params->pixel_fmts = &m_formats[0];
+#ifdef FF_API_OLD_VSINK_API
+  if ((result = m_dllAvFilter.avfilter_graph_create_filter(&m_pFilterOut, outFilter, "out", NULL, (void*)buffersink_params->pixel_fmts, m_pFilterGraph)) < 0)
+#else
+  if ((result = m_dllAvFilter.avfilter_graph_create_filter(&m_pFilterOut, outFilter, "out", NULL, buffersink_params, m_pFilterGraph)) < 0)
+#endif
+  {
+    m_dllAvUtil.av_freep(&buffersink_params);
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - avfilter_graph_create_filter: out");
+    return result;
+  }
+  m_dllAvUtil.av_freep(&buffersink_params);
+
+  if (!filters.empty())
+  {
+    AVFilterInOut* outputs = m_dllAvFilter.avfilter_inout_alloc();
+    AVFilterInOut* inputs  = m_dllAvFilter.avfilter_inout_alloc();
+
+    outputs->name    = m_dllAvUtil.av_strdup("in");
+    outputs->filter_ctx = m_pFilterIn;
+    outputs->pad_idx = 0;
+    outputs->next    = NULL;
+
+    inputs->name    = m_dllAvUtil.av_strdup("out");
+    inputs->filter_ctx = m_pFilterOut;
+    inputs->pad_idx = 0;
+    inputs->next    = NULL;
+
+    if ((result = m_dllAvFilter.avfilter_graph_parse(m_pFilterGraph, (const char*)m_filters.c_str(), &inputs, &outputs, NULL)) < 0)
+    {
+      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - avfilter_graph_parse");
+      return result;
+    }
+
+    m_dllAvFilter.avfilter_inout_free(&outputs);
+    m_dllAvFilter.avfilter_inout_free(&inputs);
+  }
+  else
+  {
+    if ((result = m_dllAvFilter.avfilter_link(m_pFilterIn, 0, m_pFilterOut, 0)) < 0)
+    {
+      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - avfilter_link");
+      return result;
+    }
+  }
+
+  if ((result = m_dllAvFilter.avfilter_graph_config(m_pFilterGraph, NULL)) < 0)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen - avfilter_graph_config");
+    return result;
+  }
+
+  return result;
+}
+
+void CDVDVideoCodecFFmpeg::FilterClose()
+{
+  if(m_pBufferRef)
+  {
+    m_dllAvFilter.avfilter_unref_buffer(m_pBufferRef);
+    m_pBufferRef = NULL;
+  }
+
+  if (m_pFilterGraph)
+  {
+    m_dllAvFilter.avfilter_graph_free(&m_pFilterGraph);
+
+    // Disposed by above code
+    m_pFilterIn   = NULL;
+    m_pFilterOut  = NULL;
+  }
+}
+
+int CDVDVideoCodecFFmpeg::FilterProcess(AVFrame* frame)
+{
+  int result, frames;
+
+  if (frame)
+  {
+    result = m_dllAvFilter.av_vsrc_buffer_add_frame(m_pFilterIn, frame, 0);
+    if (result < 0)
+    {
+      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterProcess - av_vsrc_buffer_add_frame");
+      return VC_ERROR;
+    }
+  }
+
+  if(m_pBufferRef)
+  {
+    m_dllAvFilter.avfilter_unref_buffer(m_pBufferRef);
+    m_pBufferRef = NULL;
+  }
+
+  if ((frames = m_dllAvFilter.av_buffersink_poll_frame(m_pFilterOut)) < 0)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterProcess - avfilter_poll_frame");
+    return VC_ERROR;
+  }
+
+  if (frames > 0)
+  {
+
+    result = m_dllAvFilter.av_buffersink_get_buffer_ref(m_pFilterOut, &m_pBufferRef, 0);
+    if(!m_pBufferRef)
+    {
+      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterProcess - cur_buf");
+      return VC_ERROR;
+    }
+
+    if(frame == NULL)
+      m_pFrame->reordered_opaque = 0;
+    else
+      m_pFrame->repeat_pict      = -(frames - 1);
+
+    m_pFrame->interlaced_frame = m_pBufferRef->video->interlaced;
+    m_pFrame->top_field_first  = m_pBufferRef->video->top_field_first;
+
+    memcpy(m_pFrame->linesize, m_pBufferRef->linesize, 4*sizeof(int));
+    memcpy(m_pFrame->data    , m_pBufferRef->data    , 4*sizeof(uint8_t*));
+
+    if(frames > 1)
+      return VC_PICTURE;
+    else
+      return VC_PICTURE | VC_BUFFER;
+  }
+
+  return VC_BUFFER;
 }
 
 unsigned CDVDVideoCodecFFmpeg::GetConvergeCount()

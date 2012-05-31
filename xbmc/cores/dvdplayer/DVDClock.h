@@ -26,7 +26,7 @@
 #include "threads/CriticalSection.h"
 
 #define DVD_TIME_BASE 1000000
-#define DVD_NOPTS_VALUE    (-1LL<<52) // should be possible to represent in both double and __int64
+#define DVD_NOPTS_VALUE    (-1LL<<52) // should be possible to represent in both double and int64_t
 
 #define DVD_TIME_TO_SEC(x)  ((int)((double)(x) / DVD_TIME_BASE))
 #define DVD_TIME_TO_MSEC(x) ((int)((double)(x) * 1000 / DVD_TIME_BASE))
@@ -42,7 +42,8 @@ public:
   CDVDClock();
   ~CDVDClock();
 
-  double GetClock();
+  double GetClock(bool interpolated = true);
+  double GetClock(double& absolute, bool interpolated = true);
 
   void Discontinuity(double currentPts = 0LL);
 
@@ -57,7 +58,7 @@ public:
 
   bool   SetMaxSpeedAdjust(double speed);
 
-  static double GetAbsoluteClock();
+  static double GetAbsoluteClock(bool interpolated = true);
   static double GetFrequency() { return (double)m_systemFrequency ; }
   static double WaitAbsoluteClock(double target);
 
@@ -68,6 +69,10 @@ public:
   static bool IsMasterClock()                    { return m_ismasterclock;          }
 
 protected:
+  static void   CheckSystemClock();
+  static double SystemToAbsolute(int64_t system);
+  double        SystemToPlaying(int64_t system);
+
   CSharedSection m_critSection;
   int64_t m_systemUsed;
   int64_t m_startClock;

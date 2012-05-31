@@ -21,7 +21,7 @@
 
 #include "DAVDirectory.h"
 #include "URL.h"
-#include "FileCurl.h"
+#include "CurlFile.h"
 #include "FileItem.h"
 #include "utils/RegExp.h"
 #include "utils/StringUtils.h"
@@ -110,8 +110,9 @@ void CDAVDirectory::ParseResponse(const TiXmlElement *pElement, CFileItem &item)
   {
     if (ValueWithoutNamespace(pResponseChild, "href"))
     {
-      item.m_strPath = pResponseChild->ToElement()->GetText();
-      URIUtils::RemoveSlashAtEnd(item.m_strPath);
+      CStdString path(pResponseChild->ToElement()->GetText());
+      URIUtils::RemoveSlashAtEnd(path);
+      item.SetPath(path);
     }
     else 
     if (ValueWithoutNamespace(pResponseChild, "propstat"))
@@ -167,7 +168,7 @@ void CDAVDirectory::ParseResponse(const TiXmlElement *pElement, CFileItem &item)
 
 bool CDAVDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items)
 {
-  CFileCurl dav;
+  CCurlFile dav;
   CURL url(strPath);
   CStdString strRequest = "PROPFIND";
 
@@ -196,7 +197,7 @@ bool CDAVDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items
   CStdString strResponse;
   dav.ReadData(strResponse);
 
-  TiXmlDocument davResponse;
+  CXBMCTinyXML davResponse;
   davResponse.Parse(strResponse.c_str());
 
   if (!davResponse.Parse(strResponse))
@@ -215,26 +216,27 @@ bool CDAVDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items
       CFileItem item;
       ParseResponse(pChild->ToElement(), item);
       CURL url2(strPath);
-      CURL url3(item.m_strPath);
+      CURL url3(item.GetPath());
 
-      URIUtils::AddFileToFolder(url2.GetWithoutFilename(), url3.GetFileName(), item.m_strPath);
+      CStdString itemPath(URIUtils::AddFileToFolder(url2.GetWithoutFilename(), url3.GetFileName()));
 
       if (item.GetLabel().IsEmpty())
       {
-        CStdString name(item.m_strPath);
+        CStdString name(itemPath);
         URIUtils::RemoveSlashAtEnd(name);
         CURL::Decode(name);
         item.SetLabel(URIUtils::GetFileName(name));
       }
 
       if (item.m_bIsFolder)
-        URIUtils::AddSlashAtEnd(item.m_strPath);
+        URIUtils::AddSlashAtEnd(itemPath);
 
       // Add back protocol options
       if (!url2.GetProtocolOptions().IsEmpty())
-        item.m_strPath += "|" + url2.GetProtocolOptions();
+        itemPath += "|" + url2.GetProtocolOptions();
+      item.SetPath(itemPath);
 
-      if (!item.m_strPath.Equals(strPath))
+      if (!item.GetPath().Equals(strPath))
       {
         CFileItemPtr pItem(new CFileItem(item));
         items.Add(pItem);
@@ -249,7 +251,7 @@ bool CDAVDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items
 
 bool CDAVDirectory::Exists(const char* strPath)
 {
-  CFileCurl dav;
+  CCurlFile dav;
   CURL url(strPath);
   return dav.Exists(url);
 }

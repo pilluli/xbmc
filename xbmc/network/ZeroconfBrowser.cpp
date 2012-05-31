@@ -31,13 +31,15 @@
 //on osx use the native implementation
 #include "osx/ZeroconfBrowserOSX.h"
 #endif
+#elif defined(TARGET_WINDOWS)
+#include "windows/ZeroconfBrowserWIN.h"
 #endif
 
 #include "threads/CriticalSection.h"
 #include "threads/SingleLock.h"
 #include "threads/Atomics.h"
 
-#ifndef HAS_ZEROCONF
+#if !defined(HAS_ZEROCONF)
 //dummy implementation used if no zeroconf is present
 //should be optimized away
 class CZeroconfBrowserDummy : public CZeroconfBrowser
@@ -54,11 +56,20 @@ CZeroconfBrowser* CZeroconfBrowser::smp_instance = 0;
 
 CZeroconfBrowser::CZeroconfBrowser():mp_crit_sec(new CCriticalSection),m_started(false)
 {
+#ifdef HAS_FILESYSTEM_SMB
   AddServiceType("_smb._tcp.");
+#endif
   AddServiceType("_ftp._tcp.");
   AddServiceType("_htsp._tcp.");
   AddServiceType("_daap._tcp.");
   AddServiceType("_webdav._tcp.");
+#ifdef HAS_FILESYSTEM_NFS
+  AddServiceType("_nfs._tcp.");  
+#endif// HAS_FILESYSTEM_NFS
+#ifdef HAS_FILESYSTEM_AFP
+  AddServiceType("_afpovertcp._tcp.");   
+#endif
+  AddServiceType("_sftp-ssh._tcp.");
 }
 
 CZeroconfBrowser::~CZeroconfBrowser()
@@ -144,13 +155,15 @@ CZeroconfBrowser*  CZeroconfBrowser::GetInstance()
     CAtomicSpinLock lock(sm_singleton_guard);
     if(!smp_instance)
     {
-#ifndef HAS_ZEROCONF
+#if !defined(HAS_ZEROCONF)
       smp_instance = new CZeroconfBrowserDummy;
 #else
 #ifdef __APPLE__
       smp_instance = new CZeroconfBrowserOSX;
 #elif defined(_LINUX)
       smp_instance  = new CZeroconfBrowserAvahi;
+#elif defined(TARGET_WINDOWS)
+      smp_instance  = new CZeroconfBrowserWIN;
 #endif
 #endif
     }

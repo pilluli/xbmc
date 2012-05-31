@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "system.h"
+#include "system_gl.h"
 #include "rendering/RenderSystem.h"
 #include "xbmc/guilib/GUIShader.h"
 
@@ -52,7 +54,7 @@ public:
 
   virtual bool BeginRender();
   virtual bool EndRender();
-  virtual bool PresentRender();
+  virtual bool PresentRender(const CDirtyRegionList &dirty);
   virtual bool ClearBuffers(color_t color);
   virtual bool IsExtSupported(const char* extension);
 
@@ -73,6 +75,8 @@ public:
   virtual void RestoreHardwareTransform();
 
   virtual bool TestRender();
+
+  virtual void Project(float &x, float &y, float &z);
   
   void InitialiseGUIShader();
   void EnableGUIShader(ESHADERMETHOD method);
@@ -85,7 +89,7 @@ public:
 
 protected:
   virtual void SetVSyncImpl(bool enable) = 0;
-  virtual bool PresentRenderImpl() = 0;
+  virtual bool PresentRenderImpl(const CDirtyRegionList &dirty) = 0;
   void CalculateMaxTexturesize();
   
   int        m_iVSyncMode;
@@ -101,6 +105,10 @@ protected:
 
   CGUIShader  **m_pGUIshader;  // One GUI shader for each method
   ESHADERMETHOD m_method;      // Current GUI Shader method
+
+  GLfloat    m_view[16];
+  GLfloat    m_projection[16];
+  GLint      m_viewPort[4];
 };
 
 #endif // RENDER_SYSTEM_H

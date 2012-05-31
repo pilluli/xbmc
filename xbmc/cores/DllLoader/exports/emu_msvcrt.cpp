@@ -27,21 +27,23 @@
 #include <direct.h>
 #include <process.h>
 #else
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
 #include <mntent.h>
 #endif
 #endif
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(__FreeBSD__)
 #include <sys/timeb.h>
+#endif
 #include "system.h" // for HAS_DVD_DRIVE
 #ifdef HAS_DVD_DRIVE
   #ifdef _LINUX
     #include <sys/ioctl.h>
-    #ifndef __APPLE__
-      #include <linux/cdrom.h>
-    #else
+    #ifdef __APPLE__
       #include <IOKit/storage/IODVDMediaBSDClient.h>
+    #elif !defined(__FreeBSD__)
+      #include <linux/cdrom.h>
     #endif
   #endif
 #endif
@@ -64,6 +66,7 @@
 #include "emu_kernel32.h"
 #include "util/EmuFileWrapper.h"
 #include "utils/log.h"
+#include "threads/SingleLock.h"
 #ifndef _LINUX
 #include "utils/CharsetConverter.h"
 #include "utils/URIUtils.h"
@@ -109,13 +112,12 @@ static char *dll__environ_imp[EMU_MAX_ENVIRONMENT_ITEMS + 1];
 extern "C" char **dll__environ;
 char **dll__environ = dll__environ_imp;
 
-CRITICAL_SECTION dll_cs_environ;
+CCriticalSection dll_cs_environ;
 
 #define dll_environ    (*dll___p__environ())   /* pointer to environment table */
 
 extern "C" void __stdcall init_emu_environ()
 {
-  InitializeCriticalSection(&dll_cs_environ);
   memset(dll__environ, 0, EMU_MAX_ENVIRONMENT_ITEMS + 1);
 
   // python
@@ -148,15 +150,23 @@ extern "C" void __stdcall init_emu_environ()
   {
     // using external python, it's build looking for xxx/lib/python2.6
     // so point it to frameworks which is where python2.6 is located
-    dll_putenv(string("PYTHONPATH=" + _P("special://frameworks")).c_str());
-    dll_putenv(string("PYTHONHOME=" + _P("special://frameworks")).c_str());
-    dll_putenv(string("PATH=.;" + _P("special://xbmc") + ";" + _P("special://frameworks")).c_str());
+    dll_putenv(string("PYTHONPATH=" +
+      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
+    dll_putenv(string("PYTHONHOME=" +
+      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
+    dll_putenv(string("PATH=.;" +
+      CSpecialProtocol::TranslatePath("special://xbmc") + ";" +
+      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
   }
   else
   {
-    dll_putenv(string("PYTHONPATH=" + _P("special://xbmc/system/python/DLLs") + ";" + _P("special://xbmc/system/python/Lib")).c_str());
-    dll_putenv(string("PYTHONHOME=" + _P("special://xbmc/system/python")).c_str());
-    dll_putenv(string("PATH=.;" + _P("special://xbmc") + ";" + _P("special://xbmc/system/python")).c_str());
+    dll_putenv(string("PYTHONPATH=" +
+      CSpecialProtocol::TranslatePath("special://xbmc/system/python/DLLs") + ";" +
+      CSpecialProtocol::TranslatePath("special://xbmc/system/python/Lib")).c_str());
+    dll_putenv(string("PYTHONHOME=" +
+      CSpecialProtocol::TranslatePath("special://xbmc/system/python")).c_str());
+    dll_putenv(string("PATH=.;" + CSpecialProtocol::TranslatePath("special://xbmc") + ";" +
+      CSpecialProtocol::TranslatePath("special://xbmc/system/python")).c_str());
   }
   //dll_putenv("PYTHONCASEOK=1");
   //dll_putenv("PYTHONDEBUG=1");
@@ -186,31 +196,24 @@ extern "C" void __stdcall update_emu_environ()
       g_guiSettings.GetString("network.httpproxyserver") &&
       g_guiSettings.GetString("network.httpproxyport"))
   {
-    const CStdString &strProxyServer = g_guiSettings.GetString("network.httpproxyserver");
-    const CStdString &strProxyPort = g_guiSettings.GetString("network.httpproxyport");
-    // Should we check for valid strings here? should HTTPS_PROXY use https://?
-#ifdef _WIN32
-    CStdString buf;
-    buf = "HTTP_PROXY=http://" + strProxyServer + ":" + strProxyPort;
-    pgwin32_putenv(buf.c_str());
-    buf = "HTTPS_PROXY=http://" + strProxyServer + ":" + strProxyPort;
-    dll_putenv(buf.c_str());
-#else
-    setenv( "HTTP_PROXY", "http://" + strProxyServer + ":" + strProxyPort, true );
-    setenv( "HTTPS_PROXY", "http://" + strProxyServer + ":" + strProxyPort, true );
-#endif
-    if (!g_guiSettings.GetString("network.httpproxyusername").IsEmpty())
+    CStdString strProxy;
+    if (g_guiSettings.GetString("network.httpproxyusername") &&
+        g_guiSettings.GetString("network.httpproxypassword"))
     {
-#ifdef _WIN32
-      buf = "PROXY_USER" + g_guiSettings.GetString("network.httpproxyusername");
-      pgwin32_putenv(buf.c_str());
-      buf = "PROXY_PASS=" + g_guiSettings.GetString("network.httpproxypassword");
-      dll_putenv(buf.c_str());
-#else
-      setenv("PROXY_USER", g_guiSettings.GetString("network.httpproxyusername"), true);
-      setenv("PROXY_PASS", g_guiSettings.GetString("network.httpproxypassword"), true);
-#endif
+      strProxy.Format("%s:%s@", g_guiSettings.GetString("network.httpproxyusername").c_str(),
+                                g_guiSettings.GetString("network.httpproxypassword").c_str());
     }
+
+    strProxy += g_guiSettings.GetString("network.httpproxyserver");
+    strProxy += ":" + g_guiSettings.GetString("network.httpproxyport");
+
+#ifdef _WIN32
+    pgwin32_putenv(("HTTP_PROXY=http://" +strProxy).c_str());
+    pgwin32_putenv(("HTTPS_PROXY=http://" +strProxy).c_str());
+#else
+    setenv( "HTTP_PROXY", "http://" + strProxy, true );
+    setenv( "HTTPS_PROXY", "http://" + strProxy, true );
+#endif
   }
   else
   {
@@ -535,7 +538,7 @@ extern "C"
     else if (!IS_STD_STREAM(stream))
     {
       // Translate the path
-      return freopen(_P(path).c_str(), mode, stream);
+      return freopen(CSpecialProtocol::TranslatePath(path).c_str(), mode, stream);
     }
 
     // error
@@ -775,7 +778,7 @@ extern "C"
   {
     char str[1024];
     int size = sizeof(str);
-    CURL url(_P(file));
+    CURL url(CSpecialProtocol::TranslatePath(file));
     if (url.IsLocal())
     {
       // move to CFile classes
@@ -799,7 +802,7 @@ extern "C"
       // Make sure the slashes are correct & translate the path
       struct _wfinddata64i32_t wdata;
       CStdStringW strwfile;
-      g_charsetConverter.utf8ToW(CUtil::ValidatePath(_P(str)), strwfile, false);
+      g_charsetConverter.utf8ToW(CUtil::ValidatePath(CSpecialProtocol::TranslatePath(str)), strwfile, false);
       intptr_t ret = _wfindfirst64i32(strwfile.c_str(), &wdata);
       if (ret != -1)
         to_finddata64i32(&wdata, data);
@@ -935,7 +938,7 @@ extern "C"
 
   DIR *dll_opendir(const char *file)
   {
-    CURL url(_P(file));
+    CURL url(CSpecialProtocol::TranslatePath(file));
     if (url.IsLocal())
     { // Make sure the slashes are correct & translate the path
       return opendir(CUtil::ValidatePath(url.Get().c_str()));
@@ -1166,7 +1169,7 @@ extern "C"
   FILE* dll_fopen(const char* filename, const char* mode)
   {
     FILE* file = NULL;
-#if defined(_LINUX) && !defined(__APPLE__)
+#if defined(_LINUX) && !defined(__APPLE__) && !defined(__FreeBSD__)
     if (strcmp(filename, MOUNTED) == 0
     ||  strcmp(filename, MNTTAB) == 0)
     {
@@ -1274,7 +1277,7 @@ extern "C"
     {
       // it might be something else than a file, or the file is not emulated
       // let the operating system handle it
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
       return fseek(stream, offset, origin);
 #else
       return fseeko64(stream, offset, origin);
@@ -1339,7 +1342,7 @@ extern "C"
     {
       // it might be something else than a file, or the file is not emulated
       // let the operating system handle it
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
       return ftello(stream);
 #else
       return ftello64(stream);
@@ -1385,7 +1388,7 @@ extern "C"
       CLog::Log(LOGWARNING, "msvcrt.dll: dll_telli64 called, TODO: add 'int64 -> long' type checking");      //warning
 #ifndef _LINUX
       return (__int64)tell(fd);
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__FreeBSD__)
       return lseek(fd, 0, SEEK_CUR);
 #else
       return lseek64(fd, 0, SEEK_CUR);
@@ -1562,7 +1565,7 @@ extern "C"
     int ret;
 
     ret = dll_fgetpos64(stream, &tmpPos);
-#if !defined(_LINUX) || defined(__APPLE__)
+#if !defined(_LINUX) || defined(__APPLE__) || defined(__FreeBSD__)
     *pos = (fpos_t)tmpPos;
 #else
     pos->__pos = (off_t)tmpPos.__pos;
@@ -1575,7 +1578,7 @@ extern "C"
     CFile* pFile = g_emuFileWrapper.GetFileXbmcByStream(stream);
     if (pFile != NULL)
     {
-#if !defined(_LINUX) || defined(__APPLE__)
+#if !defined(_LINUX) || defined(__APPLE__) || defined(__FreeBSD__)
       *pos = pFile->GetPosition();
 #else
       pos->__pos = pFile->GetPosition();
@@ -1597,7 +1600,7 @@ extern "C"
     int fd = g_emuFileWrapper.GetDescriptorByStream(stream);
     if (fd >= 0)
     {
-#if !defined(_LINUX) || defined(__APPLE__)
+#if !defined(_LINUX) || defined(__APPLE__) || defined(__FreeBSD__)
       if (dll_lseeki64(fd, *pos, SEEK_SET) >= 0)
 #else
       if (dll_lseeki64(fd, (__off64_t)pos->__pos, SEEK_SET) >= 0)
@@ -1614,7 +1617,7 @@ extern "C"
     {
       // it might be something else than a file, or the file is not emulated
       // let the operating system handle it
-#if !defined(_LINUX) || defined(__APPLE__)
+#if !defined(_LINUX) || defined(__APPLE__) || defined(__FreeBSD__)
       return fsetpos(stream, pos);
 #else
       return fsetpos64(stream, pos);
@@ -1630,7 +1633,7 @@ extern "C"
     if (fd >= 0)
     {
       fpos64_t tmpPos;
-#if !defined(_LINUX) || defined(__APPLE__)
+#if !defined(_LINUX) || defined(__APPLE__) || defined(__FreeBSD__)
       tmpPos= *pos;
 #else
       tmpPos.__pos = (off64_t)(pos->__pos);
@@ -1703,22 +1706,6 @@ extern "C"
       if (*temp)
         (*temp)(); //call initial function table.
     return 0;
-  }
-
-  uintptr_t dll_beginthread(
-    void( *start_address )( void * ),
-    unsigned stack_size,
-    void *arglist
-  )
-  {
-    return _beginthread(start_address, stack_size, arglist);
-  }
-
-  HANDLE dll_beginthreadex(LPSECURITY_ATTRIBUTES lpThreadAttributes, DWORD dwStackSize,
-                           LPTHREAD_START_ROUTINE lpStartAddress, LPVOID lpParameter, DWORD dwCreationFlags,
-                           LPDWORD lpThreadId)
-  {
-    return dllCreateThread(lpThreadAttributes, dwStackSize, lpStartAddress, lpParameter, dwCreationFlags, lpThreadId);
   }
 
   //SLOW CODE SHOULD BE REVISED
@@ -1915,7 +1902,7 @@ extern "C"
     if (!dir) return -1;
 
     // Make sure the slashes are correct & translate the path
-    CStdString strPath = CUtil::ValidatePath(_P(dir));
+    CStdString strPath = CUtil::ValidatePath(CSpecialProtocol::TranslatePath(dir));
 #ifndef _LINUX
     CStdStringW strWPath;
     g_charsetConverter.utf8ToW(strPath, strWPath, false);
@@ -1951,50 +1938,56 @@ extern "C"
 
         memcpy(var, envstring, value_start - envstring);
         var[value_start - envstring] = 0;
-        strupr(var);
+        char* temp = var;
+        while (*temp)
+        {
+          *temp = (char)toupper(*temp);
+          temp++;
+        }
 
         strncpy(value, value_start + 1, size);
         if (size)
           value[size - 1] = '\0';
 
-        EnterCriticalSection(&dll_cs_environ);
-
-        char** free_position = NULL;
-        for (int i = 0; i < EMU_MAX_ENVIRONMENT_ITEMS && free_position == NULL; i++)
         {
-          if (dll__environ[i] != NULL)
+          CSingleLock lock(dll_cs_environ);
+
+          char** free_position = NULL;
+          for (int i = 0; i < EMU_MAX_ENVIRONMENT_ITEMS && free_position == NULL; i++)
           {
-            // we only support overwriting the old values
-            if (strnicmp(dll__environ[i], var, strlen(var)) == 0)
+            if (dll__environ[i] != NULL)
             {
-              // free it first
-              free(dll__environ[i]);
-              dll__environ[i] = NULL;
+              // we only support overwriting the old values
+              if (strnicmp(dll__environ[i], var, strlen(var)) == 0)
+              {
+                // free it first
+                free(dll__environ[i]);
+                dll__environ[i] = NULL;
+                free_position = &dll__environ[i];
+              }
+            }
+            else
+            {
               free_position = &dll__environ[i];
             }
           }
-          else
-          {
-            free_position = &dll__environ[i];
-          }
-        }
 
-        if (free_position != NULL)
-        {
-          // free position, copy value
-          size = strlen(var) + strlen(value) + 2;
-          *free_position = (char*)malloc(size); // for '=' and 0 termination
-          if ((*free_position))
+          if (free_position != NULL)
           {
-            strncpy(*free_position, var, size);
-            (*free_position)[size - 1] = '\0';
-            strncat(*free_position, "=", size - strlen(*free_position));
-            strncat(*free_position, value, size - strlen(*free_position));
-            added = true;
+            // free position, copy value
+            size = strlen(var) + strlen(value) + 2;
+            *free_position = (char*)malloc(size); // for '=' and 0 termination
+            if ((*free_position))
+            {
+              strncpy(*free_position, var, size);
+              (*free_position)[size - 1] = '\0';
+              strncat(*free_position, "=", size - strlen(*free_position));
+              strncat(*free_position, value, size - strlen(*free_position));
+              added = true;
+            }
           }
-        }
 
-        LeaveCriticalSection(&dll_cs_environ);
+        }
 
         free(value);
       }
@@ -2009,23 +2002,23 @@ extern "C"
   {
     char* value = NULL;
 
-    EnterCriticalSection(&dll_cs_environ);
-
-    update_emu_environ();//apply any changes
-
-    for (int i = 0; i < EMU_MAX_ENVIRONMENT_ITEMS && value == NULL; i++)
     {
-      if (dll__environ[i])
+      CSingleLock lock(dll_cs_environ);
+
+      update_emu_environ();//apply any changes
+
+      for (int i = 0; i < EMU_MAX_ENVIRONMENT_ITEMS && value == NULL; i++)
       {
-        if (strnicmp(dll__environ[i], szKey, strlen(szKey)) == 0)
+        if (dll__environ[i])
         {
-          // found it
-          value = dll__environ[i] + strlen(szKey) + 1;
+          if (strnicmp(dll__environ[i], szKey, strlen(szKey)) == 0)
+          {
+            // found it
+            value = dll__environ[i] + strlen(szKey) + 1;
+          }
         }
       }
     }
-
-    LeaveCriticalSection(&dll_cs_environ);
 
     if (value != NULL)
     {
@@ -2104,7 +2097,7 @@ extern "C"
      if (!pFile)
        return -1;
 
-#ifdef HAS_DVD_DRIVE
+#if defined(HAS_DVD_DRIVE) && !defined(__FreeBSD__)
 #ifndef __APPLE__
     if(request == DVD_READ_STRUCT || request == DVD_AUTH)
 #else
@@ -2147,7 +2140,7 @@ extern "C"
       CLog::Log(LOGERROR, "%s - getmntent is not implemented for our virtual filesystem", __FUNCTION__);
       return NULL;
     }
-#if defined(_LINUX) && !defined(__APPLE__)
+#if defined(_LINUX) && !defined(__APPLE__) && !defined(__FreeBSD__)
     return getmntent(fp);
 #else
     CLog::Log(LOGWARNING, "%s - unimplemented function called", __FUNCTION__);

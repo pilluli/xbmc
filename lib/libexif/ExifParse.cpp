@@ -413,7 +413,13 @@ void CExifParse::ProcessDir(const unsigned char* const DirStart,
     // Extract useful components of tag
     switch(Tag)
     {
-//      case TAG_DESCRIPTION:       strncpy(m_ExifInfo->Description, ValuePtr, 5);    break;
+      case TAG_DESCRIPTION:
+      {
+        int length = max(ByteCount, 0);
+        length = min(length, MAX_COMMENT);
+        strncpy(m_ExifInfo->Description, (char *)ValuePtr, length);
+        break;
+      }
       case TAG_MAKE:              strncpy(m_ExifInfo->CameraMake, (char *)ValuePtr, 32);    break;
       case TAG_MODEL:             strncpy(m_ExifInfo->CameraModel, (char *)ValuePtr, 40);    break;
 //      case TAG_SOFTWARE:          strncpy(m_ExifInfo->Software, ValuePtr, 5);    break;
@@ -446,7 +452,7 @@ void CExifParse::ProcessDir(const unsigned char* const DirStart,
       {
         const int EXIF_COMMENT_HDR_LENGTH = 8;        // All comment tags have 8 bytes of header info
         int length = max(ByteCount - EXIF_COMMENT_HDR_LENGTH, 0);
-        length = min(length, 2000);
+        length = min(length, MAX_COMMENT);
         strncpy(m_ExifInfo->Comments, (char *)ValuePtr+EXIF_COMMENT_HDR_LENGTH, length);
 //        FixComment(comment);                          // Ensure comment is printable
       }
@@ -810,15 +816,15 @@ void CExifParse::ProcessGpsInfo(
                     const unsigned char* const OffsetBase,
                     unsigned ExifLength)
 {
-  int NumDirEntries = Get16(DirStart);
+  int NumDirEntries = Get16(DirStart, m_MotorolaOrder);
 
   for (int de=0;de<NumDirEntries;de++)
   {
     const unsigned char* DirEntry = DIR_ENTRY_ADDR(DirStart, de);
 
-    unsigned Tag        = Get16(DirEntry);
-    unsigned Format     = Get16(DirEntry+2);
-    unsigned Components = (unsigned)Get32(DirEntry+4);
+    unsigned Tag        = Get16(DirEntry, m_MotorolaOrder);
+    unsigned Format     = Get16(DirEntry+2, m_MotorolaOrder);
+    unsigned Components = (unsigned)Get32(DirEntry+4, m_MotorolaOrder);
     if ((Format-1) >= NUM_FORMATS)
     {
       // (-1) catches illegal zero case as unsigned underflows to positive large.
@@ -834,7 +840,7 @@ void CExifParse::ProcessGpsInfo(
 
     if (ByteCount > 4)
     {
-      unsigned OffsetVal = (unsigned)Get32(DirEntry+8);
+      unsigned OffsetVal = (unsigned)Get32(DirEntry+8, m_MotorolaOrder);
       // If its bigger than 4 bytes, the dir entry contains an offset.
       if (OffsetVal+ByteCount > ExifLength)
       {
@@ -878,7 +884,7 @@ void CExifParse::ProcessGpsInfo(
       case TAG_GPS_ALT:
         {
           char temp[18];
-          sprintf(temp,"%dm", Get32(ValuePtr));
+          sprintf(temp,"%dm", Get32(ValuePtr, m_MotorolaOrder));
           strcat(m_ExifInfo->GpsAlt, temp);
         }
       break;

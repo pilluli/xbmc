@@ -73,10 +73,14 @@ public:
   CFileItem(const CStdString &path, const CAlbum& album);
   CFileItem(const CArtist& artist);
   CFileItem(const CGenre& genre);
+  CFileItem(const MUSIC_INFO::CMusicInfoTag& music);
   CFileItem(const CVideoInfoTag& movie);
   CFileItem(const CMediaSource& share);
   virtual ~CFileItem(void);
   virtual CGUIListItem *Clone() const { return new CFileItem(*this); };
+
+  const CStdString &GetPath() const { return m_strPath; };
+  void SetPath(const CStdString &path) { m_strPath = path; };
 
   void Reset();
   const CFileItem& operator=(const CFileItem& item);
@@ -93,13 +97,15 @@ public:
   bool IsKaraoke() const;
   bool IsCUESheet() const;
   bool IsLastFM() const;
-  bool IsInternetStream() const;
+  bool IsInternetStream(const bool bStrictCheck = false) const;
   bool IsPlayList() const;
   bool IsSmartPlayList() const;
   bool IsPythonScript() const;
   bool IsXBE() const;
   bool IsPlugin() const;
+  bool IsScript() const;
   bool IsAddonsPath() const;
+  bool IsSourcesPath() const;
   bool IsShortCut() const;
   bool IsNFO() const;
   bool IsDVDImage() const;
@@ -117,6 +123,7 @@ public:
   bool IsOnLAN() const;
   bool IsHD() const;
   bool IsNfs() const;  
+  bool IsAfp() const;    
   bool IsRemote() const;
   bool IsSmb() const;
   bool IsURL() const;
@@ -192,11 +199,7 @@ public:
   CPictureInfoTag* GetPictureInfoTag();
 
   // Gets the cached thumb filename (no existence checks)
-  CStdString GetCachedVideoThumb() const;
-  CStdString GetCachedEpisodeThumb() const;
   CStdString GetCachedArtistThumb() const;
-  CStdString GetCachedSeasonThumb() const;
-  CStdString GetCachedActorThumb() const;
   /*!
    \brief Get the cached fanart path for this item if it exists
    \return path to the cached fanart for this item, or empty if none exists
@@ -205,8 +208,6 @@ public:
   CStdString GetCachedFanart() const;
   static CStdString GetCachedThumb(const CStdString &path, const CStdString& strPath2, bool split=false);
 
-  // Sets the video thumb (cached first, else caches user thumb)
-  void SetVideoThumb();
   /*!
    \brief Cache a copy of the local fanart for this item if we don't already have an image cached
    \return true if we already have cached fanart or if the caching was successful, false if no image is cached.
@@ -221,10 +222,8 @@ public:
   CStdString GetLocalFanart() const;
 
   // Sets the cached thumb for the item if it exists
-  void SetCachedVideoThumb();
   void SetCachedArtistThumb();
   void SetCachedMusicThumb();
-  void SetCachedSeasonThumb();
 
   // Gets the .tbn file associated with this item
   CStdString GetTBNFile() const;
@@ -233,20 +232,39 @@ public:
   // Gets the correct movie title
   CStdString GetMovieName(bool bUseFolderNames = false) const;
 
-  /*! \brief Find the base movie path (eg the folder if using "use foldernames for lookups")
-   Takes care of VIDEO_TS, BDMV, and rar:// listings
+  /*! \brief Find the base movie path (i.e. the item the user expects us to use to lookup the movie)
+   For folder items, with "use foldernames for lookups" it returns the folder.
+   Regardless of settings, for VIDEO_TS/BDMV it returns the parent of the VIDEO_TS/BDMV folder (if present)
+
    \param useFolderNames whether we're using foldernames for lookups
    \return the base movie folder
    */
   CStdString GetBaseMoviePath(bool useFolderNames) const;
+
+#ifdef UNIT_TESTING
+  static bool testGetBaseMoviePath();
+#endif
 
   // Gets the user thumb, if it exists
   CStdString GetUserVideoThumb() const;
   CStdString GetUserMusicThumb(bool alwaysCheckRemote = false) const;
 
   // Caches the user thumb and assigns it to the item
-  void SetUserVideoThumb();
   void SetUserMusicThumb(bool alwaysCheckRemote = false);
+
+  /*! \brief Get the path where we expect local metadata to reside.
+   For a folder, this is just the existing path (eg tvshow folder)
+   For a file, this is the parent path, with exceptions made for VIDEO_TS and BDMV files
+
+   Three cases are handled:
+
+     /foo/bar/movie_name/file_name          -> /foo/bar/movie_name/
+     /foo/bar/movie_name/VIDEO_TS/file_name -> /foo/bar/movie_name/
+     /foo/bar/movie_name/BDMV/file_name     -> /foo/bar/movie_name/
+
+     \sa URIUtils::GetParentPath
+   */
+  CStdString GetLocalMetadataPath() const;
 
   // finds a matching local trailer file
   CStdString FindTrailer() const;
@@ -269,8 +287,9 @@ public:
    Properties are appended, and labels, thumbnail and icon are updated if non-empty
    in the given item.
    \param item the item used to supplement information
+   \param replaceLabels whether to replace labels (defaults to true)
    */
-  void UpdateInfo(const CFileItem &item);
+  void UpdateInfo(const CFileItem &item, bool replaceLabels = true);
 
   bool IsSamePath(const CFileItem *item) const;
 
@@ -280,7 +299,6 @@ private:
   CStdString GetPreviouslyCachedMusicThumb() const;
 
 public:
-  CStdString m_strPath;            ///< complete path to item
   bool m_bIsShareOrDrive;    ///< is this a root share/drive
   int m_iDriveType;     ///< If \e m_bIsShareOrDrive is \e true, use to get the share type. Types see: CMediaSource::m_iDriveType
   CDateTime m_dateTime;             ///< file creation date & time
@@ -295,7 +313,9 @@ public:
   CStdString m_strLockCode;
   int m_iHasLock; // 0 - no lock 1 - lock, but unlocked 2 - locked
   int m_iBadPwdCount;
+
 private:
+  CStdString m_strPath;            ///< complete path to item
 
   SPECIAL_SORT m_specialSort;
   bool m_bIsParentFolder;
@@ -394,7 +414,14 @@ public:
   void SetFastLookup(bool fastLookup);
   bool Contains(const CStdString& fileName) const;
   bool GetFastLookup() const { return m_fastLookup; };
-  void Stack();
+
+  /*! \brief stack a CFileItemList
+   By default we stack all items (files and folders) in a CFileItemList
+   \param stackFiles whether to stack all items or just collapse folders (defaults to true)
+   \sa StackFiles,StackFolders
+   */
+  void Stack(bool stackFiles = true);
+
   SORT_ORDER GetSortOrder() const { return m_sortOrder; }
   SORT_METHOD GetSortMethod() const { return m_sortMethod; }
   /*! \brief load a CFileItemList out of the cache
@@ -435,7 +462,6 @@ public:
   void RemoveDiscCache(int windowID = 0) const;
   bool AlwaysCache() const;
 
-  void SetCachedVideoThumbs();
   void SetCachedMusicThumbs();
 
   void Swap(unsigned int item1, unsigned int item2);
@@ -466,7 +492,19 @@ public:
 private:
   void Sort(FILEITEMLISTCOMPARISONFUNC func);
   void FillSortFields(FILEITEMFILLFUNC func);
-  CStdString GetDiscCacheFile(int windowID) const;
+  CStdString GetDiscFileCache(int windowID) const;
+
+  /*!
+   \brief stack files in a CFileItemList
+   \sa Stack
+   */
+  void StackFiles();
+
+  /*!
+   \brief stack folders in a CFileItemList
+   \sa Stack
+   */
+  void StackFolders();
 
   VECFILEITEMS m_items;
   MAPFILEITEMS m_map;

@@ -20,11 +20,14 @@
  */
 
 #include "XHandle.h"
-#include "XThreadUtils.h"
 #include "utils/log.h"
-#include "threads/XBMC_mutex.h"
+#include "threads/SingleLock.h"
 
 int CXHandle::m_objectTracker[10] = {0};
+
+HANDLE WINAPI GetCurrentProcess(void) {
+  return (HANDLE)-1; // -1 a special value - pseudo handle
+}
 
 CXHandle::CXHandle()
 {
@@ -46,16 +49,9 @@ CXHandle::CXHandle(const CXHandle &src)
   CLog::Log(LOGWARNING,"%s, copy handle.", __FUNCTION__);
 
   Init();
-  if (src.m_pSem)
-    m_pSem = new CSemaphore(*src.m_pSem);
-
-  if (m_threadValid)
-  {
-    CLog::Log(LOGERROR, "%s - thread handle copied instead of passed!", __FUNCTION__);
-  }
 
   if (src.m_hMutex)
-    m_hMutex = SDL_CreateMutex();
+    m_hMutex = new CCriticalSection();
 
   fd = src.fd;
   m_bManualEvent = src.m_bManualEvent;
@@ -82,23 +78,17 @@ CXHandle::~CXHandle()
     CLog::Log(LOGERROR,"%s, destroying handle with ref count %d", __FUNCTION__, m_nRefCount);
     assert(false);
   }
-  
-  delete m_pSem;
 
   if (m_hMutex) {
-    SDL_DestroyMutex(m_hMutex);
+    delete m_hMutex;
   }
 
   if (m_internalLock) {
-    SDL_DestroyMutex(m_internalLock);
+    delete m_internalLock;
   }
 
   if (m_hCond) {
-    SDL_DestroyCond(m_hCond);
-  }
-
-  if (m_threadValid) {
-    pthread_join(m_hThread, NULL);
+    delete m_hCond;
   }
 
   if ( fd != 0 ) {
@@ -110,22 +100,16 @@ CXHandle::~CXHandle()
 void CXHandle::Init()
 {
   fd=0;
-  m_pSem=NULL;
   m_hMutex=NULL;
-  m_threadValid=false;
   m_hCond=NULL;
   m_type = HND_NULL;
   RecursionCount=0;
-  OwningThread=0;
   m_bManualEvent=FALSE;
   m_bEventSet=FALSE;
   m_nFindFileIterator=0 ;
   m_nRefCount=1;
   m_tmCreation = time(NULL);
-  m_internalLock = SDL_CreateMutex();
-#ifdef __APPLE__
-  m_machThreadPort = 0;
-#endif
+  m_internalLock = new CCriticalSection();
 }
 
 void CXHandle::ChangeType(HandleType newType) {
@@ -148,10 +132,11 @@ bool CloseHandle(HANDLE hObject) {
     return true;
 
   bool bDelete = false;
-  SDL_LockMutex(hObject->m_internalLock);
-  if (--hObject->m_nRefCount == 0)
-    bDelete = true;
-  SDL_UnlockMutex(hObject->m_internalLock);
+  {
+    CSingleLock lock((*hObject->m_internalLock));
+    if (--hObject->m_nRefCount == 0)
+      bDelete = true;
+  }
 
   if (bDelete)
     delete hObject;
@@ -181,9 +166,10 @@ BOOL WINAPI DuplicateHandle(
   if (hSourceHandle == (HANDLE)-1)
     return FALSE;
 
-  SDL_LockMutex(hSourceHandle->m_internalLock);
-  hSourceHandle->m_nRefCount++;
-  SDL_UnlockMutex(hSourceHandle->m_internalLock);
+  {
+    CSingleLock lock(*(hSourceHandle->m_internalLock));
+    hSourceHandle->m_nRefCount++;
+  }
 
   if(lpTargetHandle)
     *lpTargetHandle = hSourceHandle;

@@ -20,6 +20,9 @@
  */
 
 #include "system.h"
+#if defined(HAS_GL)
+  #include "system_gl.h"
+#endif
 #include "RenderManager.h"
 #include "threads/CriticalSection.h"
 #include "video/VideoReferenceClock.h"
@@ -30,10 +33,7 @@
 #include "Application.h"
 #include "settings/Settings.h"
 #include "settings/GUISettings.h"
-
-#ifdef _LINUX
-#include "PlatformInclude.h"
-#endif
+#include "settings/AdvancedSettings.h"
 
 #if defined(HAS_GL)
   #include "LinuxRendererGL.h"
@@ -49,6 +49,8 @@
 
 /* to use the same as player */
 #include "../dvdplayer/DVDClock.h"
+#include "../dvdplayer/DVDCodecs/Video/DVDVideoCodec.h"
+#include "../dvdplayer/DVDCodecs/DVDCodecUtils.h"
 
 #define MAXPRESENTDELAY 0.500
 
@@ -64,18 +66,18 @@ public:
   CRetakeLock(CSharedSection &section, bool immidiate = true, CCriticalSection &owned = g_graphicsContext)
     : m_owned(owned)
   {
-    m_count = ExitCriticalSection(m_owned);
+    m_count = m_owned.exit();
     m_lock  = new T(section);
     if(immidiate)
     {
-      RestoreCriticalSection(m_owned, m_count);
+      m_owned.restore(m_count);
       m_count = 0;
     }
   }
   ~CRetakeLock()
   {
     delete m_lock;
-    RestoreCriticalSection(m_owned, m_count);
+    m_owned.restore(m_count);
   }
   void Leave() { m_lock->Leave(); }
   void Enter() { m_lock->Enter(); }
@@ -97,9 +99,10 @@ CXBMCRenderManager::CXBMCRenderManager()
   m_presentstep = PRESENT_IDLE;
   m_rendermethod = 0;
   m_presentsource = 0;
-  m_presentmethod = VS_INTERLACEMETHOD_NONE;
+  m_presentmethod = PRESENT_METHOD_SINGLE;
   m_bReconfigured = false;
   m_hasCaptures = false;
+  m_displayLatency = 0.0f;
 }
 
 CXBMCRenderManager::~CXBMCRenderManager()
@@ -108,10 +111,26 @@ CXBMCRenderManager::~CXBMCRenderManager()
   m_pRenderer = NULL;
 }
 
+void CXBMCRenderManager::GetVideoRect(CRect &source, CRect &dest)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    m_pRenderer->GetVideoRect(source, dest);
+}
+
+float CXBMCRenderManager::GetAspectRatio()
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->GetAspectRatio();
+  else
+    return 1.0f;
+}
+
 /* These is based on CurrentHostCounter() */
 double CXBMCRenderManager::GetPresentTime()
 {
-  return CDVDClock::GetAbsoluteClock() / DVD_TIME_BASE;
+  return CDVDClock::GetAbsoluteClock(false) / DVD_TIME_BASE;
 }
 
 static double wrap(double x, double minimum, double maximum)
@@ -208,7 +227,7 @@ CStdString CXBMCRenderManager::GetVSyncState()
   return state;
 }
 
-bool CXBMCRenderManager::Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags)
+bool CXBMCRenderManager::Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags, ERenderFormat format, unsigned extended_format)
 {
   /* make sure any queued frame was fully presented */
   double timeout = m_presenttime + 0.1;
@@ -228,7 +247,7 @@ bool CXBMCRenderManager::Configure(unsigned int width, unsigned int height, unsi
     return false;
   }
 
-  bool result = m_pRenderer->Configure(width, height, d_width, d_height, fps, flags);
+  bool result = m_pRenderer->Configure(width, height, d_width, d_height, fps, flags, format, extended_format);
   if(result)
   {
     if( flags & CONF_FLAGS_FULLSCREEN )
@@ -282,17 +301,14 @@ void CXBMCRenderManager::RenderUpdate(bool clear, DWORD flags, DWORD alpha)
     }
   }
 
-  CSharedLock lock(m_sharedSection);
-
-  if( m_presentmethod == VS_INTERLACEMETHOD_RENDER_WEAVE
-   || m_presentmethod == VS_INTERLACEMETHOD_RENDER_WEAVE_INVERTED)
-    m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_BOTH, alpha);
+  if (g_advancedSettings.m_videoDisableBackgroundDeinterlace)
+  {
+    CSharedLock lock(m_sharedSection);
+    PresentSingle(clear, flags, alpha);
+  }
   else
-    m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_LAST, alpha);
+    Render(clear, flags, alpha);
 
-  m_overlays.Render();
-
-  m_presentstep = PRESENT_IDLE;
   m_presentevent.Set();
 }
 
@@ -320,6 +336,8 @@ unsigned int CXBMCRenderManager::PreInit()
 #endif
   }
 
+  UpdateDisplayLatency();
+
   return m_pRenderer->PreInit();
 }
 
@@ -335,6 +353,35 @@ void CXBMCRenderManager::UnInit()
   // TODO: we may also want to release the renderer here.
   if (m_pRenderer)
     m_pRenderer->UnInit();
+}
+
+bool CXBMCRenderManager::Flush()
+{
+  if (!m_pRenderer)
+    return true;
+
+  if (g_application.IsCurrentThread())
+  {
+    CLog::Log(LOGDEBUG, "%s - flushing renderer", __FUNCTION__);
+
+    CRetakeLock<CExclusiveLock> lock(m_sharedSection);
+    m_pRenderer->Flush();
+    m_flushEvent.Set();
+  }
+  else
+  {
+    ThreadMessage msg = {TMSG_RENDERER_FLUSH};
+    m_flushEvent.Reset();
+    g_application.getApplicationMessenger().SendMessage(msg, false);
+    if (!m_flushEvent.WaitMSec(1000))
+    {
+      CLog::Log(LOGERROR, "%s - timed out waiting for renderer to flush", __FUNCTION__);
+      return false;
+    }
+    else
+      return true;
+  }
+  return true;
 }
 
 void CXBMCRenderManager::SetupScreenshot()
@@ -480,6 +527,13 @@ void CXBMCRenderManager::RemoveCapture(CRenderCapture* capture)
     m_captures.erase(it);
 }
 
+void CXBMCRenderManager::SetViewMode(int iViewMode)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    m_pRenderer->SetViewMode(iViewMode);
+}
+
 void CXBMCRenderManager::FlipPage(volatile bool& bStop, double timestamp /* = 0LL*/, int source /*= -1*/, EFIELDSYNC sync /*= FS_NONE*/)
 {
   if(timestamp - GetPresentTime() > MAXPRESENTDELAY)
@@ -510,32 +564,43 @@ void CXBMCRenderManager::FlipPage(volatile bool& bStop, double timestamp /* = 0L
     m_presentfield = sync;
     m_presentstep  = PRESENT_FLIP;
     m_presentsource = source;
-    m_presentmethod = g_settings.m_currentVideoSettings.m_InterlaceMethod;
+    EDEINTERLACEMODE deinterlacemode = g_settings.m_currentVideoSettings.m_DeinterlaceMode;
+    EINTERLACEMETHOD interlacemethod = AutoInterlaceMethodInternal(g_settings.m_currentVideoSettings.m_InterlaceMethod);
 
-    /* select render method for auto */
-    if(m_presentmethod == VS_INTERLACEMETHOD_AUTO)
+    bool invert = false;
+
+    if (deinterlacemode == VS_DEINTERLACEMODE_OFF)
+      m_presentmethod = PRESENT_METHOD_SINGLE;
+    else
     {
-      if(m_presentfield == FS_NONE)
-        m_presentmethod = VS_INTERLACEMETHOD_NONE;
-      else if(m_pRenderer->Supports(VS_INTERLACEMETHOD_RENDER_BOB))
-        m_presentmethod = VS_INTERLACEMETHOD_RENDER_BOB;
+      if (deinterlacemode == VS_DEINTERLACEMODE_AUTO && m_presentfield == FS_NONE)
+        m_presentmethod = PRESENT_METHOD_SINGLE;
       else
-        m_presentmethod = VS_INTERLACEMETHOD_NONE;
+      {
+        if      (interlacemethod == VS_INTERLACEMETHOD_RENDER_BLEND)            m_presentmethod = PRESENT_METHOD_BLEND;
+        else if (interlacemethod == VS_INTERLACEMETHOD_RENDER_WEAVE)            m_presentmethod = PRESENT_METHOD_WEAVE;
+        else if (interlacemethod == VS_INTERLACEMETHOD_RENDER_WEAVE_INVERTED) { m_presentmethod = PRESENT_METHOD_WEAVE ; invert = true; }
+        else if (interlacemethod == VS_INTERLACEMETHOD_RENDER_BOB)              m_presentmethod = PRESENT_METHOD_BOB;
+        else if (interlacemethod == VS_INTERLACEMETHOD_RENDER_BOB_INVERTED)   { m_presentmethod = PRESENT_METHOD_BOB; invert = true; }
+        else if (interlacemethod == VS_INTERLACEMETHOD_DXVA_BOB)                m_presentmethod = PRESENT_METHOD_BOB;
+        else if (interlacemethod == VS_INTERLACEMETHOD_DXVA_BEST)               m_presentmethod = PRESENT_METHOD_BOB;
+        else                                                                    m_presentmethod = PRESENT_METHOD_SINGLE;
+
+        /* default to odd field if we want to deinterlace and don't know better */
+        if (deinterlacemode == VS_DEINTERLACEMODE_FORCE && m_presentfield == FS_NONE)
+          m_presentfield = FS_TOP;
+
+        /* invert present field */
+        if(invert)
+        {
+          if( m_presentfield == FS_BOT )
+            m_presentfield = FS_TOP;
+          else
+            m_presentfield = FS_BOT;
+        }
+      }
     }
 
-    /* default to odd field if we want to deinterlace and don't know better */
-    if(m_presentfield == FS_NONE && m_presentmethod != VS_INTERLACEMETHOD_NONE)
-      m_presentfield = FS_TOP;
-
-    /* invert present field if we have one of those methods */
-    if( m_presentmethod == VS_INTERLACEMETHOD_RENDER_BOB_INVERTED
-     || m_presentmethod == VS_INTERLACEMETHOD_RENDER_WEAVE_INVERTED )
-    {
-      if( m_presentfield == FS_BOT )
-        m_presentfield = FS_TOP;
-      else
-        m_presentfield = FS_BOT;
-    }
   }
 
   g_application.NewFrame();
@@ -549,6 +614,22 @@ void CXBMCRenderManager::FlipPage(volatile bool& bStop, double timestamp /* = 0L
       return;
     }
   }
+}
+
+void CXBMCRenderManager::Reset()
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    m_pRenderer->Reset();
+}
+
+RESOLUTION CXBMCRenderManager::GetResolution()
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->GetResolution();
+  else
+    return RES_INVALID;
 }
 
 float CXBMCRenderManager::GetMaximumFPS()
@@ -566,6 +647,22 @@ float CXBMCRenderManager::GetMaximumFPS()
   return fps;
 }
 
+void CXBMCRenderManager::Render(bool clear, DWORD flags, DWORD alpha)
+{
+  CSharedLock lock(m_sharedSection);
+
+  if( m_presentmethod == PRESENT_METHOD_BOB )
+    PresentBob(clear, flags, alpha);
+  else if( m_presentmethod == PRESENT_METHOD_WEAVE )
+    PresentWeave(clear, flags, alpha);
+  else if( m_presentmethod == PRESENT_METHOD_BLEND )
+    PresentBlend(clear, flags, alpha);
+  else
+    PresentSingle(clear, flags, alpha);
+
+  m_overlays.Render();
+}
+
 void CXBMCRenderManager::Present()
 {
   { CRetakeLock<CExclusiveLock> lock(m_sharedSection);
@@ -581,20 +678,7 @@ void CXBMCRenderManager::Present()
     }
   }
 
-  CSharedLock lock(m_sharedSection);
-
-  if     ( m_presentmethod == VS_INTERLACEMETHOD_RENDER_BOB
-        || m_presentmethod == VS_INTERLACEMETHOD_RENDER_BOB_INVERTED)
-    PresentBob();
-  else if( m_presentmethod == VS_INTERLACEMETHOD_RENDER_WEAVE
-        || m_presentmethod == VS_INTERLACEMETHOD_RENDER_WEAVE_INVERTED)
-    PresentWeave();
-  else if( m_presentmethod == VS_INTERLACEMETHOD_RENDER_BLEND )
-    PresentBlend();
-  else
-    PresentSingle();
-
-  m_overlays.Render();
+  Render(true, 0, 255);
 
   /* wait for this present to be valid */
   if(g_graphicsContext.IsFullScreenVideo())
@@ -604,71 +688,82 @@ void CXBMCRenderManager::Present()
 }
 
 /* simple present method */
-void CXBMCRenderManager::PresentSingle()
+void CXBMCRenderManager::PresentSingle(bool clear, DWORD flags, DWORD alpha)
 {
   CSingleLock lock(g_graphicsContext);
 
-  m_pRenderer->RenderUpdate(true, 0, 255);
+  m_pRenderer->RenderUpdate(clear, flags, alpha);
   m_presentstep = PRESENT_IDLE;
 }
 
 /* new simpler method of handling interlaced material, *
  * we just render the two fields right after eachother */
-void CXBMCRenderManager::PresentBob()
+void CXBMCRenderManager::PresentBob(bool clear, DWORD flags, DWORD alpha)
 {
   CSingleLock lock(g_graphicsContext);
 
   if(m_presentstep == PRESENT_FRAME)
   {
     if( m_presentfield == FS_BOT)
-      m_pRenderer->RenderUpdate(true, RENDER_FLAG_BOT, 255);
+      m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_BOT | RENDER_FLAG_FIELD0, alpha);
     else
-      m_pRenderer->RenderUpdate(true, RENDER_FLAG_TOP, 255);
+      m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_TOP | RENDER_FLAG_FIELD0, alpha);
     m_presentstep = PRESENT_FRAME2;
     g_application.NewFrame();
   }
   else
   {
     if( m_presentfield == FS_TOP)
-      m_pRenderer->RenderUpdate(true, RENDER_FLAG_BOT, 255);
+      m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_BOT | RENDER_FLAG_FIELD1, alpha);
     else
-      m_pRenderer->RenderUpdate(true, RENDER_FLAG_TOP, 255);
+      m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_TOP | RENDER_FLAG_FIELD1, alpha);
     m_presentstep = PRESENT_IDLE;
   }
 }
 
-void CXBMCRenderManager::PresentBlend()
+void CXBMCRenderManager::PresentBlend(bool clear, DWORD flags, DWORD alpha)
 {
   CSingleLock lock(g_graphicsContext);
 
   if( m_presentfield == FS_BOT )
   {
-    m_pRenderer->RenderUpdate(true, RENDER_FLAG_BOT | RENDER_FLAG_NOOSD, 255);
-    m_pRenderer->RenderUpdate(false, RENDER_FLAG_TOP, 128);
+    m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_BOT | RENDER_FLAG_NOOSD, alpha);
+    m_pRenderer->RenderUpdate(false, flags | RENDER_FLAG_TOP, alpha / 2);
   }
   else
   {
-    m_pRenderer->RenderUpdate(true, RENDER_FLAG_TOP | RENDER_FLAG_NOOSD, 255);
-    m_pRenderer->RenderUpdate(false, RENDER_FLAG_BOT, 128);
+    m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_TOP | RENDER_FLAG_NOOSD, alpha);
+    m_pRenderer->RenderUpdate(false, flags | RENDER_FLAG_BOT, alpha / 2);
   }
   m_presentstep = PRESENT_IDLE;
 }
 
 /* renders the two fields as one, but doing fieldbased *
  * scaling then reinterlaceing resulting image         */
-void CXBMCRenderManager::PresentWeave()
+void CXBMCRenderManager::PresentWeave(bool clear, DWORD flags, DWORD alpha)
 {
   CSingleLock lock(g_graphicsContext);
 
-  m_pRenderer->RenderUpdate(true, RENDER_FLAG_BOTH, 255);
+  m_pRenderer->RenderUpdate(clear, flags | RENDER_FLAG_BOTH, alpha);
   m_presentstep = PRESENT_IDLE;
 }
 
 void CXBMCRenderManager::Recover()
 {
-#ifdef HAS_GL
+#if defined(HAS_GL) && !defined(TARGET_DARWIN)
   glFlush(); // attempt to have gpu done with pixmap and vdpau
 #endif
+
+  UpdateDisplayLatency();
+}
+
+void CXBMCRenderManager::UpdateDisplayLatency()
+{
+  float refresh = g_graphicsContext.GetFPS();
+  if (g_graphicsContext.GetVideoResolution() == RES_WINDOW)
+    refresh = 0; // No idea about refresh rate when windowed, just get the default latency
+  m_displayLatency = (double) g_advancedSettings.GetDisplayLatency(refresh);
+  CLog::Log(LOGDEBUG, "CRenderManager::UpdateDisplayLatency - Latency set to %1.0f msec", m_displayLatency * 1000.0f);
 }
 
 void CXBMCRenderManager::UpdateResolution()
@@ -683,4 +778,133 @@ void CXBMCRenderManager::UpdateResolution()
     }
     m_bReconfigured = false;
   }
+}
+
+
+unsigned int CXBMCRenderManager::GetProcessorSize()
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->GetProcessorSize();
+  return 0;
+}
+
+// Supported pixel formats, can be called before configure
+std::vector<ERenderFormat> CXBMCRenderManager::SupportedFormats()
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->SupportedFormats();
+  return std::vector<ERenderFormat>();
+}
+
+int CXBMCRenderManager::AddVideoPicture(DVDVideoPicture& pic)
+{
+  CSharedLock lock(m_sharedSection);
+  if (!m_pRenderer)
+    return -1;
+
+  if(m_pRenderer->AddVideoPicture(&pic))
+    return 1;
+
+  YV12Image image;
+  int index = m_pRenderer->GetImage(&image);
+
+  if(index < 0)
+    return index;
+
+  if(pic.format == RENDER_FMT_YUV420P
+  || pic.format == RENDER_FMT_YUV420P10
+  || pic.format == RENDER_FMT_YUV420P16)
+  {
+    CDVDCodecUtils::CopyPicture(&image, &pic);
+  }
+  else if(pic.format == RENDER_FMT_NV12)
+  {
+    CDVDCodecUtils::CopyNV12Picture(&image, &pic);
+  }
+  else if(pic.format == RENDER_FMT_YUYV422
+       || pic.format == RENDER_FMT_UYVY422)
+  {
+    CDVDCodecUtils::CopyYUV422PackedPicture(&image, &pic);
+  }
+  else if(pic.format == RENDER_FMT_DXVA)
+  {
+    CDVDCodecUtils::CopyDXVA2Picture(&image, &pic);
+  }
+#ifdef HAVE_LIBVDPAU
+  else if(pic.format == RENDER_FMT_VDPAU)
+    m_pRenderer->AddProcessor(pic.vdpau);
+#endif
+#ifdef HAVE_LIBOPENMAX
+  else if(pic.format == RENDER_FMT_OMXEGL)
+    m_pRenderer->AddProcessor(pic.openMax, &pic);
+#endif
+#ifdef TARGET_DARWIN
+  else if(pic.format == RENDER_FMT_CVBREF)
+    m_pRenderer->AddProcessor(pic.cvBufferRef);
+#endif
+#ifdef HAVE_LIBVA
+  else if(pic.format == RENDER_FMT_VAAPI)
+    m_pRenderer->AddProcessor(*pic.vaapi);
+#endif
+  m_pRenderer->ReleaseImage(index, false);
+
+  return index;
+}
+
+bool CXBMCRenderManager::Supports(ERENDERFEATURE feature)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->Supports(feature);
+  else
+    return false;
+}
+
+bool CXBMCRenderManager::Supports(EDEINTERLACEMODE method)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->Supports(method);
+  else
+    return false;
+}
+
+bool CXBMCRenderManager::Supports(EINTERLACEMETHOD method)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->Supports(method);
+  else
+    return false;
+}
+
+bool CXBMCRenderManager::Supports(ESCALINGMETHOD method)
+{
+  CSharedLock lock(m_sharedSection);
+  if (m_pRenderer)
+    return m_pRenderer->Supports(method);
+  else
+    return false;
+}
+
+EINTERLACEMETHOD CXBMCRenderManager::AutoInterlaceMethod(EINTERLACEMETHOD mInt)
+{
+  CSharedLock lock(m_sharedSection);
+  return AutoInterlaceMethodInternal(mInt);
+}
+
+EINTERLACEMETHOD CXBMCRenderManager::AutoInterlaceMethodInternal(EINTERLACEMETHOD mInt)
+{
+  if (mInt == VS_INTERLACEMETHOD_NONE)
+    return VS_INTERLACEMETHOD_NONE;
+
+  if(!m_pRenderer->Supports(mInt))
+    mInt = VS_INTERLACEMETHOD_AUTO;
+
+  if (mInt == VS_INTERLACEMETHOD_AUTO)
+    return m_pRenderer->AutoInterlaceMethod();
+
+  return mInt;
 }

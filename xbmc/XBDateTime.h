@@ -99,6 +99,7 @@ public:
 
   static CDateTime GetCurrentDateTime();
   static CDateTime GetUTCDateTime();
+  static int MonthStringToMonthNum(const CStdString& month);
 
   const CDateTime& operator =(const SYSTEMTIME& right);
   const CDateTime& operator =(const FILETIME& right);
@@ -184,6 +185,7 @@ public:
   CStdString GetAsDBDateTime() const;
   CStdString GetAsDBDate() const;
   CStdString GetAsLocalizedDate(bool longDate=false, bool withShortNames=true) const;
+  CStdString GetAsLocalizedDate(const CStdString &strFormat, bool withShortNames=true) const;
   CStdString GetAsLocalizedTime(const CStdString &format, bool withSeconds=true) const;
   CStdString GetAsLocalizedDateTime(bool longDate=false, bool withSeconds=true) const;
   CStdString GetAsRFC1123DateTime() const;

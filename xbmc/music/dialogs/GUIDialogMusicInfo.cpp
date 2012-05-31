@@ -40,7 +40,9 @@
 #include "guilib/LocalizeStrings.h"
 #include "utils/log.h"
 #include "utils/URIUtils.h"
+#include "utils/StringUtils.h"
 #include "TextureCache.h"
+#include "ThumbnailCache.h"
 
 using namespace std;
 using namespace XFILE;
@@ -128,7 +130,7 @@ bool CGUIDialogMusicInfo::OnMessage(CGUIMessage& message)
       }
       else if (iControl == CONTROL_BTN_LASTFM)
       {
-        CStdString strArtist = m_album.strArtist;
+        CStdString strArtist = StringUtils::Join(m_album.artist, g_advancedSettings.m_musicItemSeparator);
         CURL::Encode(strArtist);
         CStdString strLink;
         strLink.Format("lastfm://artist/%s/similarartists", strArtist.c_str());
@@ -152,19 +154,22 @@ void CGUIDialogMusicInfo::SetAlbum(const CAlbum& album, const CStdString &path)
   SetSongs(m_album.songs);
   *m_albumItem = CFileItem(path, true);
   m_albumItem->GetMusicInfoTag()->SetAlbum(m_album.strAlbum);
-  m_albumItem->GetMusicInfoTag()->SetAlbumArtist(m_album.strArtist);
-  m_albumItem->GetMusicInfoTag()->SetArtist(m_album.strArtist);
+  m_albumItem->GetMusicInfoTag()->SetAlbumArtist(StringUtils::Join(m_album.artist, g_advancedSettings.m_musicItemSeparator));
+  m_albumItem->GetMusicInfoTag()->SetArtist(m_album.artist);
   m_albumItem->GetMusicInfoTag()->SetYear(m_album.iYear);
   m_albumItem->GetMusicInfoTag()->SetLoaded(true);
   m_albumItem->GetMusicInfoTag()->SetRating('0' + (m_album.iRating + 1) / 2);
-  m_albumItem->GetMusicInfoTag()->SetGenre(m_album.strGenre);
+  m_albumItem->GetMusicInfoTag()->SetGenre(m_album.genre);
   CMusicDatabase::SetPropertiesFromAlbum(*m_albumItem,m_album);
   m_albumItem->SetMusicThumb();
   // set the artist thumb
-  CFileItem artist(m_album.strArtist);
+  CFileItem artist(StringUtils::Join(m_album.artist, g_advancedSettings.m_musicItemSeparator));
   artist.SetCachedArtistThumb();
   if (CFile::Exists(artist.GetThumbnailImage()))
     m_albumItem->SetProperty("artistthumb", artist.GetThumbnailImage());
+  CStdString strFanart = m_albumItem->GetCachedFanart();
+  if (CFile::Exists(strFanart))
+    m_albumItem->SetProperty("fanart_image",strFanart);
   m_hasUpdatedThumb = false;
   m_bArtistInfo = false;
   m_albumSongs->SetContent("albums");
@@ -179,7 +184,7 @@ void CGUIDialogMusicInfo::SetArtist(const CArtist& artist, const CStdString &pat
   m_albumItem->GetMusicInfoTag()->SetAlbumArtist(m_artist.strArtist);
   m_albumItem->GetMusicInfoTag()->SetArtist(m_artist.strArtist);
   m_albumItem->GetMusicInfoTag()->SetLoaded(true);
-  m_albumItem->GetMusicInfoTag()->SetGenre(m_artist.strGenre);
+  m_albumItem->GetMusicInfoTag()->SetGenre(m_artist.genre);
   CMusicDatabase::SetPropertiesFromArtist(*m_albumItem,m_artist);
   CStdString strFanart = m_albumItem->GetCachedFanart();
   if (CFile::Exists(strFanart))
@@ -287,7 +292,7 @@ void CGUIDialogMusicInfo::Update()
   // disable the GetThumb button if the user isn't allowed it
   CONTROL_ENABLE_ON_CONDITION(CONTROL_BTN_GET_THUMB, g_settings.GetCurrentProfile().canWriteDatabases() || g_passwordManager.bMasterUser);
 
-  if (!m_album.strArtist.IsEmpty() && CLastFmManager::GetInstance()->IsLastFmEnabled())
+  if (!m_album.artist.empty() && CLastFmManager::GetInstance()->IsLastFmEnabled())
   {
     SET_CONTROL_VISIBLE(CONTROL_BTN_LASTFM);
   }
@@ -318,7 +323,7 @@ void CGUIDialogMusicInfo::RefreshThumb()
     if (m_bArtistInfo)
       thumbImage = m_albumItem->GetCachedArtistThumb();
     else
-      thumbImage = CUtil::GetCachedAlbumThumb(m_album.strAlbum, m_album.strArtist);
+      thumbImage = CThumbnailCache::GetAlbumThumb(m_album);
 
     if (!CFile::Exists(thumbImage))
     {
@@ -327,7 +332,12 @@ void CGUIDialogMusicInfo::RefreshThumb()
     }
   }
   if (!CFile::Exists(thumbImage) )
-    thumbImage.Empty();
+  {
+    if (m_bArtistInfo)
+      thumbImage = "DefaultArtist.png";
+    else
+      thumbImage = "DefaultAlbumCover.png";
+  }
 
   m_albumItem->SetThumbnailImage(thumbImage);
 }
@@ -442,7 +452,7 @@ void CGUIDialogMusicInfo::OnGetThumb()
   if (m_bArtistInfo)
     cachedThumb = m_albumItem->GetCachedArtistThumb();
   else
-    cachedThumb = CUtil::GetCachedAlbumThumb(m_album.strAlbum, m_album.strArtist);
+    cachedThumb = CThumbnailCache::GetAlbumThumb(m_album);
 
   CTextureCache::Get().ClearCachedImage(cachedThumb, true);
   if (result.Left(14) == "thumb://Remote")
@@ -480,7 +490,7 @@ void CGUIDialogMusicInfo::OnGetFanart()
 {
   CFileItemList items;
 
-  CStdString cachedThumb(CFileItem::GetCachedThumb(m_artist.strArtist,g_settings.GetMusicFanartFolder()));
+  CStdString cachedThumb(CThumbnailCache::GetThumb(m_artist.strArtist,g_settings.GetMusicFanartFolder()));
   if (CFile::Exists(cachedThumb))
   {
     CFileItemPtr itemCurrent(new CFileItem("fanart://Current",false));

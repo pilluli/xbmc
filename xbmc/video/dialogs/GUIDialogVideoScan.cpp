@@ -40,7 +40,6 @@ using namespace VIDEO;
 CGUIDialogVideoScan::CGUIDialogVideoScan(void)
 : CGUIDialog(WINDOW_DIALOG_VIDEO_SCAN, "DialogVideoScan.xml")
 {
-  m_videoInfoScanner.SetObserver(this);
 }
 
 CGUIDialogVideoScan::~CGUIDialogVideoScan(void)
@@ -72,7 +71,7 @@ bool CGUIDialogVideoScan::OnMessage(CGUIMessage& message)
 
 void CGUIDialogVideoScan::FrameMove()
 {
-  if (m_bRunning)
+  if (m_active)
     UpdateState();
 
   CGUIDialog::FrameMove();
@@ -115,27 +114,10 @@ void CGUIDialogVideoScan::OnSetTitle(const CStdString& strTitle)
   m_strTitle = strTitle;
 }
 
-void CGUIDialogVideoScan::StartScanning(const CStdString& strDirectory, bool scanAll)
+void CGUIDialogVideoScan::ShowScan()
 {
   m_ScanState = PREPARING;
-
-  if (!g_guiSettings.GetBool("videolibrary.backgroundupdate"))
-  {
-    Show();
-  }
-
-  m_videoInfoScanner.Start(strDirectory,scanAll);
-}
-
-void CGUIDialogVideoScan::StopScanning()
-{
-  if (m_videoInfoScanner.IsScanning())
-    m_videoInfoScanner.Stop();
-}
-
-bool CGUIDialogVideoScan::IsScanning()
-{
-  return m_videoInfoScanner.IsScanning();
+  Show();
 }
 
 void CGUIDialogVideoScan::OnDirectoryScanned(const CStdString& strDirectory)

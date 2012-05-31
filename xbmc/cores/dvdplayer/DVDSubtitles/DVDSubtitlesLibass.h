@@ -22,17 +22,18 @@
  */
 
 #include "DllLibass.h"
+#include "DVDResource.h"
 #include "threads/CriticalSection.h"
 
 /** Wrapper for Libass **/
 
-class CDVDSubtitlesLibass
+class CDVDSubtitlesLibass : public IDVDResourceCounted<CDVDSubtitlesLibass>
 {
 public:
   CDVDSubtitlesLibass();
-  ~CDVDSubtitlesLibass();
+  virtual ~CDVDSubtitlesLibass();
 
-  ASS_Image* RenderImage(int imageWidth, int imageHeight, double pts);
+  ASS_Image* RenderImage(int imageWidth, int imageHeight, double pts, int* changes = NULL);
   ASS_Event* GetEvents();
 
   int GetNrOfEvents();
@@ -40,10 +41,6 @@ public:
   bool DecodeHeader(char* data, int size);
   bool DecodeDemuxPkt(char* data, int size, double start, double duration);
   bool CreateTrack(char* buf);
-
-  long GetNrOfReferences();
-  long Acquire();
-  long Release();
 
 private:
   DllLibass m_dll;

@@ -29,6 +29,7 @@
 #include "XBDateTime.h"
 #include "threads/Thread.h"
 #include "Application.h"
+#include "XbmcContext.h"
 
 typedef BOOL (WINAPI *MINIDUMPWRITEDUMP)(HANDLE hProcess, DWORD dwPid, HANDLE hFile, MINIDUMP_TYPE DumpType,
                                         CONST PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
@@ -43,7 +44,7 @@ LONG WINAPI CreateMiniDump( EXCEPTION_POINTERS* pEp )
   CStdString errorMsg;
   CStdString dumpFile;
   CDateTime now(CDateTime::GetCurrentDateTime());
-  dumpFile.Format("%s\\XBMC\\xbmc_crashlog-%04i%02i%02i-%02i%02i%02i.dmp", CWIN32Util::GetProfilePath().c_str(), now.GetYear(), now.GetMonth(), now.GetDay(), now.GetHour(), now.GetMinute(), now.GetSecond());
+  dumpFile.Format("%s\\xbmc_crashlog-%04i%02i%02i-%02i%02i%02i.dmp", CWIN32Util::GetProfilePath().c_str(), now.GetYear(), now.GetMonth(), now.GetDay(), now.GetHour(), now.GetMinute(), now.GetSecond());
   HANDLE hFile = CreateFile(dumpFile.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL ); 
 
   // Call MiniDumpWriteDump api with the dump file
@@ -105,6 +106,9 @@ LONG WINAPI CreateMiniDump( EXCEPTION_POINTERS* pEp )
 //-----------------------------------------------------------------------------
 INT WINAPI WinMain( HINSTANCE hInst, HINSTANCE, LPSTR commandLine, INT )
 {
+  // set up some xbmc specific relationships
+  XBMC::Context context;
+
   //this can't be set from CAdvancedSettings::Initialize() because it will overwrite
   //the loglevel set with the --debug flag
 #ifdef _DEBUG

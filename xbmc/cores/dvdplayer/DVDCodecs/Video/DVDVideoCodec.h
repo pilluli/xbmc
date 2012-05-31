@@ -24,6 +24,7 @@
 #include "system.h"
 
 #include <vector>
+#include "cores/VideoRenderers/RenderFormats.h"
 
 // when modifying these structures, make sure you update all codecs accordingly
 #define FRAME_TYPE_UNDEF 0
@@ -32,16 +33,12 @@
 #define FRAME_TYPE_B 3
 #define FRAME_TYPE_D 4
 
-namespace DXVA { class CProcessor; }
+namespace DXVA { class CSurfaceContext; }
 namespace VAAPI { struct CHolder; }
 class CVDPAU;
 class COpenMax;
 class COpenMaxVideo;
 struct OpenMaxVideoBuffer;
-#ifdef HAVE_VIDEOTOOLBOXDECODER
-  class CDVDVideoCodecVideoToolBox;
-  struct __CVBuffer;
-#endif
 
 // should be entirely filled by all codecs
 struct DVDVideoPicture
@@ -56,8 +53,7 @@ struct DVDVideoPicture
       int iLineSize[4];   // [4] = alpha channel, currently not used
     };
     struct {
-      DXVA::CProcessor* proc;
-      int64_t           proc_id;
+      DXVA::CSurfaceContext* context;
     };
     struct {
       CVDPAU* vdpau;
@@ -70,12 +66,10 @@ struct DVDVideoPicture
       COpenMax *openMax;
       OpenMaxVideoBuffer *openMaxBuffer;
     };
-#ifdef HAVE_VIDEOTOOLBOXDECODER
+
     struct {
-      CDVDVideoCodecVideoToolBox *vtb;
       struct __CVBuffer *cvBufferRef;
     };
-#endif
   };
 
   unsigned int iFlags;
@@ -85,6 +79,10 @@ struct DVDVideoPicture
   unsigned int iFrameType         : 4; // see defines above // 1->I, 2->P, 3->B, 0->Undef
   unsigned int color_matrix       : 4;
   unsigned int color_range        : 1; // 1 indicate if we have a full range of color
+  unsigned int chroma_position;
+  unsigned int color_primaries;
+  unsigned int color_transfer;
+  unsigned int extended_format;
   int iGroupId;
 
   int8_t* qscale_table; // Quantization parameters, primarily used by filters
@@ -96,17 +94,7 @@ struct DVDVideoPicture
   unsigned int iDisplayWidth;  // width of the picture without black bars
   unsigned int iDisplayHeight; // height of the picture without black bars
 
-  enum EFormat {
-    FMT_YUV420P = 0,
-    FMT_VDPAU,
-    FMT_NV12,
-    FMT_UYVY,
-    FMT_YUY2,
-    FMT_DXVA,
-    FMT_VAAPI,
-    FMT_OMXEGL,
-    FMT_CVBREF,
-  } format;
+  ERenderFormat format;
 };
 
 struct DVDVideoUserData
@@ -132,7 +120,7 @@ struct DVDVideoUserData
 
 class CDVDStreamInfo;
 class CDVDCodecOption;
-typedef std::vector<CDVDCodecOption> CDVDCodecOptions;
+class CDVDCodecOptions;
 
 // VC_ messages, messages can be combined
 #define VC_ERROR    0x00000001  // an error occured, no other messages will be returned
@@ -203,6 +191,35 @@ public:
    * codec can then skip actually decoding the data, just consume the data set picture headers
    */
   virtual void SetDropState(bool bDrop) = 0;
+
+  /*
+   * returns the number of demuxer bytes in any internal buffers
+   */
+  virtual int GetDataSize(void)
+  {
+    return 0;
+  }
+
+  /*
+   * returns the time in seconds for demuxer bytes in any internal buffers
+   */
+  virtual double GetTimeSize(void)
+  {
+    return 0;
+  }
+
+  enum EFilterFlags {
+    FILTER_NONE                =  0x0,
+    FILTER_DEINTERLACE_YADIF   =  0x1,  /* use first deinterlace mode */
+    FILTER_DEINTERLACE_ANY     =  0xf,  /* use any deinterlace mode */
+    FILTER_DEINTERLACE_FLAGGED = 0x10,  /* only deinterlace flagged frames */
+    FILTER_DEINTERLACE_HALFED  = 0x20,  /* do half rate deinterlacing */
+  };
+
+  /*
+   * set the type of filters that should be applied at decoding stage if possible
+   */
+  virtual unsigned int SetFilters(unsigned int filters) { return 0u; }
 
   /*
    *

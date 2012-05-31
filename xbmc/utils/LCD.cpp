@@ -168,14 +168,14 @@ CStdString ILCD::GetProgressBar(double tCurrent, double tTotal)
   unsigned char cLCDsmallBlocks = 0xb0; //this char (0xAC-0xAF) will be translated in LCD.cpp to the smallBlock
   unsigned char cLCDbigBlock = 0xab;  //this char will be translated in LCD.cpp to the right bigBlock
   int iBigBlock = 5;      // a big block is a combination of 5 small blocks
-  int m_iColumns = g_advancedSettings.m_lcdColumns - 2;
+  int iColumns = GetColumns()-2;
 
-  if (m_iColumns > 0)
+  if (iColumns > 0)
   {
-    double dBlockSize = tTotal * 0.99 / m_iColumns / iBigBlock; // mult with 0.99 to show the last bar
+    double dBlockSize = tTotal * 0.99 / iColumns / iBigBlock; // mult with 0.99 to show the last bar
 
     CStdString strProgressBar = "[";
-    for (int i = 1;i <= m_iColumns;i++)
+    for (int i = 1;i <= iColumns;i++)
     {
       //set full blocks
       if (tCurrent >= i * iBigBlock * dBlockSize)
@@ -388,6 +388,8 @@ void ILCD::Initialize()
   lcdPath = g_settings.GetUserDataItem("LCD.xml");
   LoadSkin(lcdPath);
   m_eCurrentCharset = CUSTOM_CHARSET_DEFAULT;
+  m_disableOnPlay = DISABLE_ON_PLAY_NONE;
+  m_eCurrentCharset = CUSTOM_CHARSET_DEFAULT;
 
   // Big number blocks, used for screensaver clock
   // Note, the big block isn't here, it's in the LCD's ROM
@@ -404,7 +406,7 @@ void ILCD::LoadSkin(const CStdString &xmlFile)
 
   bool condensed = TiXmlBase::IsWhiteSpaceCondensed();
   TiXmlBase::SetCondenseWhiteSpace(false);
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
   if (!doc.LoadFile(xmlFile.c_str()))
   {
     CLog::Log(LOGERROR, "Unable to load LCD skin file %s", xmlFile.c_str());

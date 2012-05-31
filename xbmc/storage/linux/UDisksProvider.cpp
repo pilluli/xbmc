@@ -24,6 +24,7 @@
 #include "guilib/LocalizeStrings.h"
 #include "utils/log.h"
 #include "utils/URIUtils.h"
+#include "PosixMountProvider.h"
 
 CUDiskDevice::CUDiskDevice(const char *DeviceKitUDI)
 {
@@ -72,7 +73,7 @@ void CUDiskDevice::Update()
   m_isOptical = properties["DeviceIsOpticalDisc"].asBoolean();
   if (m_isPartition)
   {
-    CVariant isRemovable = CDBusUtil::GetVariant("org.freedesktop.UDisks", properties["PartitionSlave"].asString(), "org.freedesktop.UDisks.Device", "DeviceIsRemovable");
+    CVariant isRemovable = CDBusUtil::GetVariant("org.freedesktop.UDisks", properties["PartitionSlave"].asString().c_str(), "org.freedesktop.UDisks.Device", "DeviceIsRemovable");
 
     if ( !isRemovable.isNull() )
       m_isRemovable = isRemovable.asBoolean();
@@ -218,7 +219,7 @@ CUDisksProvider::~CUDisksProvider()
 void CUDisksProvider::Initialize()
 {
   CLog::Log(LOGDEBUG, "Selected UDisks as storage provider");
-  m_DaemonVersion = atoi(CDBusUtil::GetVariant("org.freedesktop.UDisks", "/org/freedesktop/UDisks", "org.freedesktop.UDisks", "DaemonVersion").asString());
+  m_DaemonVersion = atoi(CDBusUtil::GetVariant("org.freedesktop.UDisks", "/org/freedesktop/UDisks", "org.freedesktop.UDisks", "DaemonVersion").asString().c_str());
   CLog::Log(LOGDEBUG, "UDisks: DaemonVersion %i", m_DaemonVersion);
 
   CLog::Log(LOGDEBUG, "UDisks: Querying available devices");
@@ -245,21 +246,8 @@ bool CUDisksProvider::Eject(CStdString mountpath)
 
 std::vector<CStdString> CUDisksProvider::GetDiskUsage()
 {
-  std::vector<CStdString> devices;
-  DeviceMap::iterator itr;
-
-  for(itr = m_AvailableDevices.begin(); itr != m_AvailableDevices.end(); ++itr)
-  {
-    CUDiskDevice *device = itr->second;
-    if (device->m_isMounted)
-    {
-      CStdString str;
-      str.Format("%s %.1f GiB", device->m_MountPath.c_str(), device->m_PartitionSizeGiB);
-      devices.push_back(str);
-    }
-  }
-
-  return devices;
+  CPosixMountProvider legacy;
+  return legacy.GetDiskUsage();
 }
 
 bool CUDisksProvider::PumpDriveChangeEvents(IStorageEventsCallback *callback)
@@ -315,7 +303,8 @@ bool CUDisksProvider::HasUDisks()
 
 void CUDisksProvider::DeviceAdded(const char *object, IStorageEventsCallback *callback)
 {
-  CLog::Log(LOGDEBUG, "UDisks: DeviceAdded (%s)", object);
+  if (g_advancedSettings.m_logLevel >= LOG_LEVEL_DEBUG_SAMBA)
+    CLog::Log(LOGDEBUG, "UDisks: DeviceAdded (%s)", object);
 
   if (m_AvailableDevices[object])
   {
@@ -330,10 +319,12 @@ void CUDisksProvider::DeviceAdded(const char *object, IStorageEventsCallback *ca
   if (g_advancedSettings.m_handleMounting)
     device->Mount();
 
-  CLog::Log(LOGDEBUG, "UDisks: DeviceAdded - %s", device->toString().c_str());
+  if (g_advancedSettings.m_logLevel >= LOG_LEVEL_DEBUG_SAMBA)
+    CLog::Log(LOGDEBUG, "UDisks: DeviceAdded - %s", device->toString().c_str());
+
   if (device->m_isMounted && device->IsApproved())
   {
-    CLog::Log(LOGNOTICE, "UDisks: Added %s", device->m_MountPath.c_str());
+    CLog::Log(LOGINFO, "UDisks: Added %s", device->m_MountPath.c_str());
     if (callback)
       callback->OnStorageAdded(device->m_Label, device->m_MountPath);
   }
@@ -341,7 +332,8 @@ void CUDisksProvider::DeviceAdded(const char *object, IStorageEventsCallback *ca
 
 void CUDisksProvider::DeviceRemoved(const char *object, IStorageEventsCallback *callback)
 {
-  CLog::Log(LOGDEBUG, "UDisks: DeviceRemoved (%s)", object);
+  if (g_advancedSettings.m_logLevel >= LOG_LEVEL_DEBUG_SAMBA)
+    CLog::Log(LOGDEBUG, "UDisks: DeviceRemoved (%s)", object);
 
   CUDiskDevice *device = m_AvailableDevices[object];
   if (device)
@@ -356,7 +348,8 @@ void CUDisksProvider::DeviceRemoved(const char *object, IStorageEventsCallback *
 
 void CUDisksProvider::DeviceChanged(const char *object, IStorageEventsCallback *callback)
 {
-  CLog::Log(LOGDEBUG, "UDisks: DeviceChanged (%s)", object);
+  if (g_advancedSettings.m_logLevel >= LOG_LEVEL_DEBUG_SAMBA)
+    CLog::Log(LOGDEBUG, "UDisks: DeviceChanged (%s)", object);
 
   CUDiskDevice *device = m_AvailableDevices[object];
   if (device == NULL)
@@ -367,13 +360,18 @@ void CUDisksProvider::DeviceChanged(const char *object, IStorageEventsCallback *
   else
   {
     bool mounted = device->m_isMounted;
+
+    if (!mounted && g_advancedSettings.m_handleMounting)
+      device->Mount();
+
     device->Update();
     if (!mounted && device->m_isMounted && callback)
       callback->OnStorageAdded(device->m_Label, device->m_MountPath);
     else if (mounted && !device->m_isMounted && callback)
       callback->OnStorageSafelyRemoved(device->m_Label);
 
-    CLog::Log(LOGDEBUG, "UDisks: DeviceChanged - %s", device->toString().c_str());
+    if (g_advancedSettings.m_logLevel >= LOG_LEVEL_DEBUG_SAMBA)
+      CLog::Log(LOGDEBUG, "UDisks: DeviceChanged - %s", device->toString().c_str());
   }
 }
 

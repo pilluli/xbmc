@@ -68,9 +68,9 @@ bool CDVDInputStreamStack::Open(const char* path, const std::string& content)
   {
     TFile file(new CFile());
 
-    if (!file->Open(items[index]->m_strPath, READ_TRUNCATED))
+    if (!file->Open(items[index]->GetPath(), READ_TRUNCATED))
     {
-      CLog::Log(LOGERROR, "CDVDInputStreamStack::Open - failed to open stack part '%s' - skipping", items[index]->m_strPath.c_str());
+      CLog::Log(LOGERROR, "CDVDInputStreamStack::Open - failed to open stack part '%s' - skipping", items[index]->GetPath().c_str());
       continue;
     }
     TSeg segment;
@@ -79,7 +79,7 @@ bool CDVDInputStreamStack::Open(const char* path, const std::string& content)
 
     if(segment.length <= 0)
     {
-      CLog::Log(LOGERROR, "CDVDInputStreamStack::Open - failed to get file length for '%s' - skipping", items[index]->m_strPath.c_str());
+      CLog::Log(LOGERROR, "CDVDInputStreamStack::Open - failed to get file length for '%s' - skipping", items[index]->GetPath().c_str());
       continue;
     }
 
@@ -133,9 +133,9 @@ int CDVDInputStreamStack::Read(BYTE* buf, int buf_size)
   return (int)ret;
 }
 
-__int64 CDVDInputStreamStack::Seek(__int64 offset, int whence)
+int64_t CDVDInputStreamStack::Seek(int64_t offset, int whence)
 {
-  __int64 pos, len;
+  int64_t pos, len;
 
   if     (whence == SEEK_SET)
     pos = offset;
@@ -152,7 +152,7 @@ __int64 CDVDInputStreamStack::Seek(__int64 offset, int whence)
     if(len + it->length > pos)
     {
       TFile   file     = it->file;
-      __int64 file_pos = pos - len;
+      int64_t file_pos = pos - len;
       if(file->GetPosition() != file_pos)
       {
         if(file->Seek(file_pos, SEEK_SET) < 0)
@@ -170,7 +170,7 @@ __int64 CDVDInputStreamStack::Seek(__int64 offset, int whence)
   return -1;
 }
 
-__int64 CDVDInputStreamStack::GetLength()
+int64_t CDVDInputStreamStack::GetLength()
 {
   return m_length;
 }

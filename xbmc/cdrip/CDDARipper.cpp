@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "system.h"
 
 #ifdef HAS_CDDA_RIPPER
@@ -27,9 +28,13 @@
 #include "CDDAReader.h"
 #include "utils/StringUtils.h"
 #include "Util.h"
+#ifdef HAVE_LIBMP3LAME
 #include "EncoderLame.h"
-#include "EncoderWav.h"
+#endif
+#ifdef HAVE_LIBVORBISENC
 #include "EncoderVorbis.h"
+#endif
+#include "EncoderWav.h"
 #include "EncoderFFmpeg.h"
 #include "EncoderFlac.h"
 #include "filesystem/CDDADirectory.h"
@@ -41,6 +46,7 @@
 #include "dialogs/GUIDialogProgress.h"
 #include "dialogs/GUIDialogKeyboard.h"
 #include "settings/GUISettings.h"
+#include "settings/AdvancedSettings.h"
 #include "FileItem.h"
 #include "filesystem/SpecialProtocol.h"
 #include "storage/MediaManager.h"
@@ -69,17 +75,22 @@ bool CCDDARipper::Init(const CStdString& strTrackFile, const CStdString& strFile
 
   switch (g_guiSettings.GetInt("audiocds.encoder"))
   {
-  case CDDARIP_ENCODER_WAV:
-    m_pEncoder = new CEncoderWav();
-    break;
+#ifdef HAVE_LIBVORBISENC
   case CDDARIP_ENCODER_VORBIS:
     m_pEncoder = new CEncoderVorbis();
     break;
+#endif
+#ifdef HAVE_LIBMP3LAME
+  case CDDARIP_ENCODER_LAME:
+    m_pEncoder = new CEncoderLame();
+    break;
+#endif
   case CDDARIP_ENCODER_FLAC:
     m_pEncoder = new CEncoderFlac();
     break;
+  case CDDARIP_ENCODER_WAV:
   default:
-    m_pEncoder = new CEncoderLame();
+    m_pEncoder = new CEncoderWav();
     break;
   }
 
@@ -88,12 +99,13 @@ bool CCDDARipper::Init(const CStdString& strTrackFile, const CStdString& strFile
   strTrack.Format("%i", atoi(strTrackFile.substr(13, strTrackFile.size() - 13 - 5).c_str()));
 
   m_pEncoder->SetComment("Ripped with XBMC");
-  m_pEncoder->SetArtist(infoTag.GetArtist().c_str());
+  m_pEncoder->SetArtist(StringUtils::Join(infoTag.GetArtist(), g_advancedSettings.m_musicItemSeparator).c_str());
   m_pEncoder->SetTitle(infoTag.GetTitle().c_str());
   m_pEncoder->SetAlbum(infoTag.GetAlbum().c_str());
-  m_pEncoder->SetAlbumArtist(infoTag.GetAlbumArtist().c_str());
-  m_pEncoder->SetGenre(infoTag.GetGenre().c_str());
+  m_pEncoder->SetAlbumArtist(StringUtils::Join(infoTag.GetAlbumArtist(), g_advancedSettings.m_musicItemSeparator).c_str());
+  m_pEncoder->SetGenre(StringUtils::Join(infoTag.GetGenre(), g_advancedSettings.m_musicItemSeparator).c_str());
   m_pEncoder->SetTrack(strTrack.c_str());
+  m_pEncoder->SetTrackLength(m_cdReader.GetTrackLength());
   m_pEncoder->SetYear(infoTag.GetYearString().c_str());
 
   // init encoder
@@ -158,10 +170,10 @@ bool CCDDARipper::Rip(const CStdString& strTrackFile, const CStdString& strFile,
   {
     char tmp[MAX_PATH];
 #ifndef _LINUX
-    GetTempFileName(_P("special://temp/"), "riptrack", 0, tmp);
+    GetTempFileName(CSpecialProtocol::TranslatePath("special://temp/"), "riptrack", 0, tmp);
 #else
     int fd;
-    strncpy(tmp, _P("special://temp/riptrackXXXXXX"), MAX_PATH);
+    strncpy(tmp, CSpecialProtocol::TranslatePath("special://temp/riptrackXXXXXX"), MAX_PATH);
     if ((fd = mkstemp(tmp)) == -1)
       strFilename = "";
     close(fd);
@@ -254,7 +266,7 @@ bool CCDDARipper::RipTrack(CFileItem* pItem)
 {
   // don't rip non cdda items
   CStdString strExt;
-  URIUtils::GetExtension(pItem->m_strPath, strExt);
+  URIUtils::GetExtension(pItem->GetPath(), strExt);
   if (strExt.CompareNoCase(".cdda") != 0) 
   {
     CLog::Log(LOGDEBUG, "cddaripper: file is not a cdda track");
@@ -269,7 +281,7 @@ bool CCDDARipper::RipTrack(CFileItem* pItem)
 
   CStdString strFile = URIUtils::AddFileToFolder(strDirectory, CUtil::MakeLegalFileName(GetTrackName(pItem), legalType));
 
-  return Rip(pItem->m_strPath, strFile.c_str(), *pItem->GetMusicInfoTag());
+  return Rip(pItem->GetPath(), strFile.c_str(), *pItem->GetMusicInfoTag());
 }
 
 bool CCDDARipper::RipCD()
@@ -292,10 +304,10 @@ bool CCDDARipper::RipCD()
   {
     CFileItemPtr pItem = vecItems[i];
     CMusicInfoTagLoaderFactory factory;
-    auto_ptr<IMusicInfoTagLoader> pLoader (factory.CreateLoader(pItem->m_strPath));
+    auto_ptr<IMusicInfoTagLoader> pLoader (factory.CreateLoader(pItem->GetPath()));
     if (NULL != pLoader.get())
     {
-      pLoader->Load(pItem->m_strPath, *pItem->GetMusicInfoTag()); // get tag from file
+      pLoader->Load(pItem->GetPath(), *pItem->GetMusicInfoTag()); // get tag from file
       if (!pItem->GetMusicInfoTag()->Loaded())
         break;  //  No CDDB info available
     }
@@ -315,21 +327,26 @@ bool CCDDARipper::RipCD()
     // construct filename
     CStdString strFile = URIUtils::AddFileToFolder(strDirectory, CUtil::MakeLegalFileName(GetTrackName(item.get()), legalType));
 
-    unsigned int tick = CTimeUtils::GetTimeMS();
+    unsigned int tick = XbmcThreads::SystemClockMillis();
 
     // don't rip non cdda items
-    if (item->m_strPath.Find(".cdda") < 0)
+    if (item->GetPath().Find(".cdda") < 0)
       continue;
 
     // return false if Rip returned false (this means an error or the user cancelled
-    if (!Rip(item->m_strPath, strFile.c_str(), *item->GetMusicInfoTag()))
+    if (!Rip(item->GetPath(), strFile.c_str(), *item->GetMusicInfoTag()))
       return false;
 
-    tick = CTimeUtils::GetTimeMS() - tick;
+    tick = XbmcThreads::SystemClockMillis() - tick;
     CLog::Log(LOGINFO, "Ripping Track %d took %s", i, StringUtils::SecondsToTimeString(tick / 1000).c_str());
   }
 
   CLog::Log(LOGINFO, "Ripped CD succesfull");
+  if (g_guiSettings.GetBool("audiocds.ejectonrip"))
+  {
+    CLog::Log(LOGINFO, "Ejecting CD");
+    CIoSupport::EjectTray();
+  }
   return true;
 }
 
@@ -373,7 +390,7 @@ bool CCDDARipper::CreateAlbumDir(const MUSIC_INFO::CMusicInfoTag& infoTag, CStdS
     URIUtils::AddSlashAtEnd(strDirectory);
   }
 
-  CUtil::MakeLegalPath(strDirectory, legalType);
+  strDirectory = CUtil::MakeLegalPath(strDirectory, legalType);
 
   // Create directory if it doesn't exist
   if (!CUtil::CreateDirectoryEx(strDirectory))
@@ -402,9 +419,9 @@ CStdString CCDDARipper::GetAlbumDirName(const MUSIC_INFO::CMusicInfoTag& infoTag
   // replace %A with album artist name
   if (strAlbumDir.Find("%A") != -1)
   {
-    CStdString strAlbumArtist = infoTag.GetAlbumArtist();
+    CStdString strAlbumArtist = StringUtils::Join(infoTag.GetAlbumArtist(), g_advancedSettings.m_musicItemSeparator);
     if (strAlbumArtist.IsEmpty())
-      strAlbumArtist = infoTag.GetArtist();
+      strAlbumArtist = StringUtils::Join(infoTag.GetArtist(), g_advancedSettings.m_musicItemSeparator);
     if (strAlbumArtist.IsEmpty())
       strAlbumArtist = "Unknown Artist";
     else
@@ -426,7 +443,7 @@ CStdString CCDDARipper::GetAlbumDirName(const MUSIC_INFO::CMusicInfoTag& infoTag
   // replace %G with genre
   if (strAlbumDir.Find("%G") != -1)
   {
-    CStdString strGenre = infoTag.GetGenre();
+    CStdString strGenre = StringUtils::Join(infoTag.GetGenre(), g_advancedSettings.m_musicItemSeparator);
     if (strGenre.IsEmpty())
       strGenre = "Unknown Genre";
     else
@@ -451,7 +468,7 @@ CStdString CCDDARipper::GetAlbumDirName(const MUSIC_INFO::CMusicInfoTag& infoTag
 CStdString CCDDARipper::GetTrackName(CFileItem *item)
 {
   // get track number from "cdda://local/01.cdda"
-  int trackNumber = atoi(item->m_strPath.substr(13, item->m_strPath.size() - 13 - 5).c_str());
+  int trackNumber = atoi(item->GetPath().substr(13, item->GetPath().size() - 13 - 5).c_str());
 
   // Format up our ripped file label
   CFileItem destItem(*item);

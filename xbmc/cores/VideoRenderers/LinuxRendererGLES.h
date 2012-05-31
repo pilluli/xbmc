@@ -24,6 +24,8 @@
 
 #if HAS_GLES == 2
 
+#include "system_gl.h"
+
 #include "xbmc/guilib/FrameBufferObject.h"
 #include "xbmc/guilib/Shader.h"
 #include "settings/VideoSettings.h"
@@ -63,13 +65,6 @@ struct DRAWRECT
   float bottom;
 };
 
-enum EFIELDSYNC
-{
-  FS_NONE,
-  FS_TOP,
-  FS_BOT
-};
-
 struct YUVRANGE
 {
   int y_min, y_max;
@@ -86,11 +81,12 @@ struct YUVCOEF
 
 enum RenderMethod
 {
-  RENDER_GLSL=0x01,
-  RENDER_SW=0x04,
-  RENDER_POT=0x10,
-  RENDER_OMXEGL=0x40,
-  RENDER_CVREF=0x80
+  RENDER_GLSL   = 0x001,
+  RENDER_SW     = 0x004,
+  RENDER_POT    = 0x010,
+  RENDER_OMXEGL = 0x040,
+  RENDER_CVREF  = 0x080,
+  RENDER_BYPASS = 0x100
 };
 
 enum RenderQuality
@@ -119,6 +115,7 @@ extern YUVCOEF yuv_coef_smtp240m;
 class DllSwScale;
 struct SwsContext;
 
+class CEvent;
 
 class CLinuxRendererGLES : public CBaseRenderer
 {
@@ -132,11 +129,10 @@ public:
   bool RenderCapture(CRenderCapture* capture);
 
   // Player functions
-  virtual bool Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags);
+  virtual bool Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags, ERenderFormat format, unsigned extended_format);
   virtual bool IsConfigured() { return m_bConfigured; }
   virtual int          GetImage(YV12Image *image, int source = AUTOSOURCE, bool readonly = false);
   virtual void         ReleaseImage(int source, bool preserve = false);
-  virtual unsigned int DrawSlice(unsigned char *src[], int stride[], int w, int h, int x, int y);
   virtual void         FlipPage(int source);
   virtual unsigned int PreInit();
   virtual void         UnInit();
@@ -147,14 +143,19 @@ public:
   // Feature support
   virtual bool SupportsMultiPassRendering();
   virtual bool Supports(ERENDERFEATURE feature);
+  virtual bool Supports(EDEINTERLACEMODE mode);
   virtual bool Supports(EINTERLACEMETHOD method);
   virtual bool Supports(ESCALINGMETHOD method);
+
+  virtual EINTERLACEMETHOD AutoInterlaceMethod();
+
+  virtual std::vector<ERenderFormat> SupportedFormats() { return m_formats; }
 
 #ifdef HAVE_LIBOPENMAX
   virtual void         AddProcessor(COpenMax* openMax, DVDVideoPicture *picture);
 #endif
 #ifdef HAVE_VIDEOTOOLBOXDECODER
-  virtual void         AddProcessor(CDVDVideoCodecVideoToolBox* vtb, DVDVideoPicture *picture);
+  virtual void         AddProcessor(struct __CVBuffer *cvBufferRef);
 #endif
 protected:
   virtual void Render(DWORD flags, int index);
@@ -179,6 +180,10 @@ protected:
   void DeleteCVRefTexture(int index);
   bool CreateCVRefTexture(int index);
 
+  void UploadBYPASSTexture(int index);
+  void DeleteBYPASSTexture(int index);
+  bool CreateBYPASSTexture(int index);
+
   void CalculateTextureSourceRects(int source, int num_planes);
 
   // renderers
@@ -196,8 +201,10 @@ protected:
 
   bool m_bConfigured;
   bool m_bValidated;
+  std::vector<ERenderFormat> m_formats;
   bool m_bImageReady;
   unsigned m_iFlags;
+  ERenderFormat m_format;
   GLenum m_textureTarget;
   unsigned short m_renderMethod;
   RenderQuality m_renderQuality;
@@ -267,7 +274,7 @@ protected:
   BYTE	      *m_rgbBuffer;  // if software scale is used, this will hold the result image
   unsigned int m_rgbBufferSize;
 
-  HANDLE m_eventTexturesDone[NUM_BUFFERS];
+  CEvent* m_eventTexturesDone[NUM_BUFFERS];
 
 };
 

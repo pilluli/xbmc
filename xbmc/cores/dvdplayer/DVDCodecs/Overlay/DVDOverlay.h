@@ -22,6 +22,7 @@
  */
 
 #include "cores/VideoRenderers/OverlayRenderer.h"
+#include "threads/Atomics.h"
 #include <assert.h>
 #include <vector>
 
@@ -31,7 +32,8 @@ enum DVDOverlayType
   DVDOVERLAY_TYPE_SPU     = 1,
   DVDOVERLAY_TYPE_TEXT    = 2,
   DVDOVERLAY_TYPE_IMAGE   = 3,
-  DVDOVERLAY_TYPE_SSA     = 4
+  DVDOVERLAY_TYPE_SSA     = 4,
+  DVDOVERLAY_TYPE_GROUP   = 5,
 };
 
 class CDVDOverlay
@@ -78,7 +80,7 @@ public:
    */
   CDVDOverlay* Acquire()
   {
-    InterlockedIncrement(&m_references);
+    AtomicIncrement(&m_references);
     return this;
   }
 
@@ -87,7 +89,7 @@ public:
    */
   long Release()
   {
-    long count = InterlockedDecrement(&m_references);
+    long count = AtomicDecrement(&m_references);
     if (count == 0) delete this;
     return count;
   }
@@ -109,3 +111,29 @@ private:
 
 typedef std::vector<CDVDOverlay*> VecOverlays;
 typedef std::vector<CDVDOverlay*>::iterator VecOverlaysIter;
+
+
+class CDVDOverlayGroup : public CDVDOverlay
+{
+
+public:
+  virtual ~CDVDOverlayGroup()
+  {
+    for(VecOverlaysIter it = m_overlays.begin(); it != m_overlays.end(); ++it)
+      (*it)->Release();
+    m_overlays.clear();
+  }
+
+  CDVDOverlayGroup()
+    : CDVDOverlay(DVDOVERLAY_TYPE_GROUP)
+  {
+  }
+
+  CDVDOverlayGroup(CDVDOverlayGroup& src)
+    : CDVDOverlay(src)
+  {
+    for(VecOverlaysIter it = m_overlays.begin(); it != m_overlays.end(); ++it)
+      m_overlays.push_back((*it)->Acquire());
+  }
+  VecOverlays m_overlays;
+};

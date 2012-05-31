@@ -37,6 +37,7 @@
 #include "settings/Settings.h"
 #include "settings/GUISettings.h"
 #include "guilib/LocalizeStrings.h"
+#include "cores/AudioEngine/Utils/AEUtil.h"
 
 using namespace std;
 using namespace XFILE;
@@ -75,13 +76,14 @@ void CGUIDialogAudioSubtitleSettings::CreateSettings()
   // clear out any old settings
   m_settings.clear();
   // create our settings
-  m_volume = g_settings.m_nVolumeLevel * 0.01f;
-  AddSlider(AUDIO_SETTINGS_VOLUME, 13376, &m_volume, VOLUME_MINIMUM * 0.01f, (VOLUME_MAXIMUM - VOLUME_MINIMUM) * 0.0001f, VOLUME_MAXIMUM * 0.01f, FormatDecibel, false);
+  m_volume = g_settings.m_fVolumeLevel;
+  AddSlider(AUDIO_SETTINGS_VOLUME, 13376, &m_volume, VOLUME_MINIMUM, VOLUME_MAXIMUM / 100.0f, VOLUME_MAXIMUM, PercentAsDecibel, false);
+  AddSlider(AUDIO_SETTINGS_VOLUME_AMPLIFICATION, 660, &g_settings.m_currentVideoSettings.m_VolumeAmplification, VOLUME_DRC_MINIMUM * 0.01f, (VOLUME_DRC_MAXIMUM - VOLUME_DRC_MINIMUM) / 6000.0f, VOLUME_DRC_MAXIMUM * 0.01f, FormatDecibel, false);
   if (g_application.m_pPlayer && g_application.m_pPlayer->IsPassthrough())
+  {
     EnableSettings(AUDIO_SETTINGS_VOLUME,false);
-#if 0
-  AddSlider(AUDIO_SETTINGS_VOLUME_AMPLIFICATION, 660, &g_settings.m_currentVideoSettings.m_VolumeAmplification, VOLUME_DRC_MINIMUM * 0.01f, (VOLUME_DRC_MAXIMUM - VOLUME_DRC_MINIMUM) * 0.0005f, VOLUME_DRC_MAXIMUM * 0.01f, FormatDecibel, false);
-#endif
+    EnableSettings(AUDIO_SETTINGS_VOLUME_AMPLIFICATION,false);
+  }
   AddSlider(AUDIO_SETTINGS_DELAY, 297, &g_settings.m_currentVideoSettings.m_AudioDelay, -g_advancedSettings.m_videoAudioDelayRange, .025f, g_advancedSettings.m_videoAudioDelayRange, FormatDelay);
   AddAudioStreams(AUDIO_SETTINGS_STREAM);
 
@@ -188,6 +190,12 @@ void CGUIDialogAudioSubtitleSettings::AddSubtitleStreams(unsigned int id)
     if (strName.length() == 0)
       strName = "Unnamed";
 
+    CStdString strLanguage;
+    g_application.m_pPlayer->GetSubtitleLanguage(i, strLanguage);
+
+    if (strName != strLanguage)
+      strName.Format("%s [%s]", strName.c_str(), strLanguage.c_str());
+
     strItem.Format("%s (%i/%i)", strName.c_str(), i + 1, (int)setting.max + 1);
 
     setting.entry.push_back(make_pair(setting.entry.size(), strItem));
@@ -207,8 +215,8 @@ void CGUIDialogAudioSubtitleSettings::OnSettingChanged(SettingInfo &setting)
   // check and update anything that needs it
   if (setting.id == AUDIO_SETTINGS_VOLUME)
   {
-    g_settings.m_nVolumeLevel = (long)(m_volume * 100.0f);
-    g_application.SetVolume(int(((float)(g_settings.m_nVolumeLevel - VOLUME_MINIMUM)) / (VOLUME_MAXIMUM - VOLUME_MINIMUM)*100.0f + 0.5f));
+    g_settings.m_fVolumeLevel = m_volume;
+    g_application.SetVolume(m_volume, false);//false - value is not in percent
   }
   else if (setting.id == AUDIO_SETTINGS_VOLUME_AMPLIFICATION)
   {
@@ -278,13 +286,13 @@ void CGUIDialogAudioSubtitleSettings::OnSettingChanged(SettingInfo &setting)
   else if (setting.id == SUBTITLE_SETTINGS_BROWSER)
   {
     CStdString strPath;
-    if (URIUtils::IsInRAR(g_application.CurrentFileItem().m_strPath) || URIUtils::IsInZIP(g_application.CurrentFileItem().m_strPath))
+    if (URIUtils::IsInRAR(g_application.CurrentFileItem().GetPath()) || URIUtils::IsInZIP(g_application.CurrentFileItem().GetPath()))
     {
-      CURL url(g_application.CurrentFileItem().m_strPath);
+      CURL url(g_application.CurrentFileItem().GetPath());
       strPath = url.GetHostName();
     }
     else
-      strPath = g_application.CurrentFileItem().m_strPath;
+      strPath = g_application.CurrentFileItem().GetPath();
 
     CStdString strMask = ".utf|.utf8|.utf-8|.sub|.srt|.smi|.rt|.txt|.ssa|.aqt|.jss|.ass|.idx|.rar|.zip";
     if (g_application.GetCurrentPlayer() == EPC_DVDPLAYER)
@@ -345,7 +353,7 @@ void CGUIDialogAudioSubtitleSettings::OnSettingChanged(SettingInfo &setting)
 
 void CGUIDialogAudioSubtitleSettings::FrameMove()
 {
-  m_volume = g_settings.m_nVolumeLevel * 0.01f;
+  m_volume = g_settings.m_fVolumeLevel;
   UpdateSetting(AUDIO_SETTINGS_VOLUME);
   if (g_application.m_pPlayer)
   {
@@ -355,6 +363,13 @@ void CGUIDialogAudioSubtitleSettings::FrameMove()
     UpdateSetting(SUBTITLE_SETTINGS_DELAY);
   }
   CGUIDialogSettings::FrameMove();
+}
+
+CStdString CGUIDialogAudioSubtitleSettings::PercentAsDecibel(float value, float interval)
+{
+  CStdString text;
+  text.Format("%2.1f dB", CAEUtil::PercentToGain(value));
+  return text;
 }
 
 CStdString CGUIDialogAudioSubtitleSettings::FormatDecibel(float value, float interval)

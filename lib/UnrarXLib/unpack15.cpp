@@ -1,7 +1,3 @@
-#ifdef _LINUX
-#include "XSyncUtils.h"
-#endif
-
 #define STARTL1  2
 static unsigned int DecL1[]={0x8000,0xa000,0xc000,0xd000,0xe000,0xea00,
                              0xee00,0xf000,0xf200,0xf200,0xffff};
@@ -67,7 +63,7 @@ void Unpack::Unpack15(bool Solid)
 
   while (DestUnpSize>=0)
   {
-    if (WaitForSingleObject(UnpIO->hQuit,1) == WAIT_OBJECT_0)
+    if (UnpIO->hQuit->WaitMSec(1))
       return;
 
     UnpPtr&=MAXWINMASK;

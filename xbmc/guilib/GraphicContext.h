@@ -47,6 +47,7 @@
 #include "utils/StdString.h"
 #include "Resolution.h"
 #include "utils/GlobalsHandling.h"
+#include "DirtyRegion.h"
 
 enum VIEW_TYPE { VIEW_TYPE_NONE = 0,
                  VIEW_TYPE_LIST,
@@ -81,6 +82,11 @@ public:
   void SetMediaDir(const CStdString& strMediaDir);
   bool SetViewPort(float fx, float fy , float fwidth, float fheight, bool intersectPrevious = false);
   void RestoreViewPort();
+
+  void SetScissors(const CRect &rect);
+  void ResetScissors();
+  const CRect &GetScissors() const { return m_scissors; }
+
   const CRect GetViewWindow() const;
   void SetViewWindow(float left, float top, float right, float bottom);
   bool IsFullScreenRoot() const;
@@ -95,8 +101,8 @@ public:
   void ResetOverscan(RESOLUTION res, OVERSCAN &overscan);
   void ResetOverscan(RESOLUTION_INFO &resinfo);
   void ResetScreenParameters(RESOLUTION res);
-  void Lock() { EnterCriticalSection(*this); }
-  void Unlock() { LeaveCriticalSection(*this); }
+  void Lock() { lock(); }
+  void Unlock() { unlock(); }
   float GetPixelRatio(RESOLUTION iRes) const;
   void CaptureStateBlock();
   void ApplyStateBlock();
@@ -108,7 +114,7 @@ public:
   void SetRenderingResolution(const RESOLUTION_INFO &res, bool needsScaling);  ///< Sets scaling up for rendering
   void SetScalingResolution(const RESOLUTION_INFO &res, bool needsScaling);    ///< Sets scaling up for skin loading etc.
   float GetScalingPixelRatio() const;
-  void Flip();
+  void Flip(const CDirtyRegionList& dirty);
   void InvertFinalCoords(float &x, float &y) const;
   inline float ScaleFinalXCoord(float x, float y) const XBMC_FORCE_INLINE { return m_finalTransform.TransformXCoord(x, y, 0); }
   inline float ScaleFinalYCoord(float x, float y) const XBMC_FORCE_INLINE { return m_finalTransform.TransformYCoord(x, y, 0); }
@@ -164,18 +170,19 @@ public:
   void ApplyHardwareTransform();
   void RestoreHardwareTransform();
   void ClipRect(CRect &vertex, CRect &texture, CRect *diffuse = NULL);
-  inline void ResetWindowTransform()
+  inline unsigned int AddGUITransform()
   {
-    while (m_groupTransform.size())
-      m_groupTransform.pop();
+    unsigned int size = m_groupTransform.size();
     m_groupTransform.push(m_guiTransform);
+    UpdateFinalTransform(m_groupTransform.top());
+    return size;
   }
   inline TransformMatrix AddTransform(const TransformMatrix &matrix)
   {
     ASSERT(m_groupTransform.size());
     TransformMatrix absoluteMatrix = m_groupTransform.size() ? m_groupTransform.top() * matrix : matrix;
     m_groupTransform.push(absoluteMatrix);
-    UpdateFinalTransform(m_groupTransform.top());
+    UpdateFinalTransform(absoluteMatrix);
     return absoluteMatrix;
   }
   inline void SetTransform(const TransformMatrix &matrix)
@@ -186,15 +193,16 @@ public:
     m_groupTransform.push(matrix);
     UpdateFinalTransform(m_groupTransform.top());
   }
-  inline void RemoveTransform()
+  inline unsigned int RemoveTransform()
   {
-    ASSERT(m_groupTransform.size() > 1);
+    ASSERT(m_groupTransform.size());
     if (m_groupTransform.size())
       m_groupTransform.pop();
     if (m_groupTransform.size())
       UpdateFinalTransform(m_groupTransform.top());
     else
       UpdateFinalTransform(TransformMatrix());
+    return m_groupTransform.size();
   }
 
   CRect generateAABB(const CRect &rect) const;
@@ -225,6 +233,8 @@ private:
   TransformMatrix m_guiTransform;
   TransformMatrix m_finalTransform;
   std::stack<TransformMatrix> m_groupTransform;
+
+  CRect m_scissors;
 };
 
 /*!

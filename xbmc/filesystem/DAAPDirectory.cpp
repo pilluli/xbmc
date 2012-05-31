@@ -18,11 +18,10 @@
 * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#include "FileDAAP.h"
+#include "DAAPFile.h"
 #include "DAAPDirectory.h"
 #include "music/tags/MusicInfoTag.h"
 #include "FileItem.h"
-#include "SectionLoader.h"
 #include "utils/log.h"
 #include "utils/URIUtils.h"
 
@@ -37,7 +36,6 @@ const char unknownArtistAlbum[] = "Unknown";
 
 CDAAPDirectory::CDAAPDirectory(void)
 {
-  CSectionLoader::Load("LIBXDAAP");
   // m_currLevel holds where we are in the playlist/artist/album/songs hierarchy (0,1,2,3)
   m_currLevel = -1;
   m_thisHost = NULL;
@@ -55,7 +53,6 @@ CDAAPDirectory::~CDAAPDirectory(void)
   m_artisthead = NULL;
 
   m_currentSongItems = NULL;
-  CSectionLoader::Unload("LIBXDAAP");
 }
 
 bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items)
@@ -111,7 +108,7 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
         // Add item to directory list
         CLog::Log(LOGDEBUG, "DAAPDirectory: Adding item %s", strFile.c_str());
         CFileItemPtr pItem(new CFileItem(strFile));
-        pItem->m_strPath = strRoot + m_thisHost->dbplaylists->playlists[c].itemname + "/";
+        pItem->SetPath(strRoot + m_thisHost->dbplaylists->playlists[c].itemname + "/");
         pItem->m_bIsFolder = true;
         items.Add(pItem);
       }
@@ -144,7 +141,7 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
             strBuffer = cur->artist;
             CLog::Log(LOGDEBUG, "DAAPDirectory: Adding item %s", strBuffer.c_str());
             CFileItemPtr pItem(new CFileItem(strBuffer));
-            pItem->m_strPath = strRoot + cur->artist + "/";
+            pItem->SetPath(strRoot + cur->artist + "/");
             pItem->m_bIsFolder = true;
             items.Add(pItem);
             cur = cur->next;
@@ -176,10 +173,10 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
               CLog::Log(LOGDEBUG, "DAAPDirectory: Adding item %s", m_currentSongItems[idx].itemname);
               CFileItemPtr pItem(new CFileItem(m_currentSongItems[idx].itemname));
 
-
+              CStdString path;
               if( m_thisHost->version_major != 3 )
               {
-                pItem->m_strPath.Format(REQUEST42,
+                path.Format(REQUEST42,
                                         m_thisHost->host,
                                         g_DaapClient.m_iDatabase,
                                         m_currentSongItems[idx].id,
@@ -190,7 +187,7 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
               }
               else
               {
-                pItem->m_strPath.Format(REQUEST45,
+                path.Format(REQUEST45,
                                         m_thisHost->host,
                                         g_DaapClient.m_iDatabase,
                                         m_currentSongItems[idx].id,
@@ -198,10 +195,11 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
                                         m_thisHost->sessionid);
               }
 
+              pItem->SetPath(path);
               pItem->m_bIsFolder = false;
               pItem->m_dwSize = m_currentSongItems[idx].songsize;
 
-              pItem->GetMusicInfoTag()->SetURL(pItem->m_strPath);
+              pItem->GetMusicInfoTag()->SetURL(pItem->GetPath());
               pItem->GetMusicInfoTag()->SetTitle(m_currentSongItems[idx].itemname);
               pItem->GetMusicInfoTag()->SetArtist(m_currentSongItems[idx].songartist);
               pItem->GetMusicInfoTag()->SetAlbum(m_currentSongItems[idx].songalbum);
@@ -238,7 +236,7 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
           CLog::Log(LOGDEBUG, "DAAPDirectory: Adding item %s", curAlbum->album);
           CFileItemPtr pItem(new CFileItem(curAlbum->album));
 
-          pItem->m_strPath = strRoot + curAlbum->album + "/";
+          pItem->SetPath(strRoot + curAlbum->album + "/");
           pItem->m_bIsFolder = true;
           items.Add(pItem);
           curAlbum = curAlbum->next;
@@ -263,9 +261,10 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
             CLog::Log(LOGDEBUG, "DAAPDirectory: Adding item %s", m_currentSongItems[c].itemname);
             CFileItemPtr pItem(new CFileItem(m_currentSongItems[c].itemname));
 
+            CStdString path;
             if( m_thisHost->version_major != 3 )
             {
-              pItem->m_strPath.Format(REQUEST42,
+              path.Format(REQUEST42,
                                       m_thisHost->host,
                                       g_DaapClient.m_iDatabase,
                                       m_currentSongItems[c].id,
@@ -276,7 +275,7 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
             }
             else
             {
-              pItem->m_strPath.Format(REQUEST45,
+              path.Format(REQUEST45,
                                       m_thisHost->host,
                                       g_DaapClient.m_iDatabase,
                                       m_currentSongItems[c].id,
@@ -284,10 +283,11 @@ bool CDAAPDirectory::GetDirectory(const CStdString& strPath, CFileItemList &item
                                       m_thisHost->sessionid);
             }
 
+            pItem->SetPath(path);
             pItem->m_bIsFolder = false;
             pItem->m_dwSize = m_currentSongItems[c].songsize;
 
-            pItem->GetMusicInfoTag()->SetURL(pItem->m_strPath);
+            pItem->GetMusicInfoTag()->SetURL(pItem->GetPath());
 
             pItem->GetMusicInfoTag()->SetTitle(m_currentSongItems[c].itemname);
             pItem->GetMusicInfoTag()->SetArtist(m_selectedArtist);

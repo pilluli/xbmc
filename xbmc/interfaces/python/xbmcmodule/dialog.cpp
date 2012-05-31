@@ -38,12 +38,6 @@ using namespace std;
 
 #define ACTIVE_WINDOW  g_windowManager.GetActiveWindow()
 
-#ifndef __GNUC__
-#pragma code_seg("PY_TEXT")
-#pragma data_seg("PY_DATA")
-#pragma bss_seg("PY_BSS")
-#pragma const_seg("PY_RDATA")
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,9 +94,6 @@ namespace PYXBMC
     PyObject* unicodeLine[4];
     for (int i = 0; i < 4; i++) unicodeLine[i] = NULL;
 
-    CGUIDialogOK* pDialog = (CGUIDialogOK*)g_windowManager.GetWindow(window);
-    if (PyXBMCWindowIsNull(pDialog)) return NULL;
-
     // get lines, last 2 lines are optional.
     string utf8Line[4];
     if (!PyArg_ParseTuple(args, (char*)"OO|OO", &unicodeLine[0], &unicodeLine[1], &unicodeLine[2], &unicodeLine[3]))  return NULL;
@@ -112,15 +103,24 @@ namespace PYXBMC
       if (unicodeLine[i] && !PyXBMCGetUnicodeString(utf8Line[i], unicodeLine[i], i+1))
         return NULL;
     }
+    PyXBMCGUILock();
+    CGUIDialogOK* pDialog = (CGUIDialogOK*)g_windowManager.GetWindow(window);
+    if (PyXBMCWindowIsNull(pDialog)) return NULL;
+
     pDialog->SetHeading(utf8Line[0]);
     pDialog->SetLine(0, utf8Line[1]);
     pDialog->SetLine(1, utf8Line[2]);
     pDialog->SetLine(2, utf8Line[3]);
 
+    PyXBMCGUIUnlock();
+
     //send message and wait for user input
     PyXBMCWaitForThreadMessage(TMSG_DIALOG_DOMODAL, window, ACTIVE_WINDOW);
+    PyXBMCGUILock();
+    bool result = pDialog->IsConfirmed();
+    PyXBMCGUIUnlock();
 
-    return Py_BuildValue((char*)"b", pDialog->IsConfirmed());
+    return Py_BuildValue((char*)"b", result);
   }
 
   PyDoc_STRVAR(browse__doc__,
@@ -350,8 +350,6 @@ namespace PYXBMC
     const int window = WINDOW_DIALOG_YES_NO;
     PyObject* unicodeLine[6];
     for (int i = 0; i < 6; i++) unicodeLine[i] = NULL;
-    CGUIDialogYesNo* pDialog = (CGUIDialogYesNo*)g_windowManager.GetWindow(window);
-    if (PyXBMCWindowIsNull(pDialog)) return NULL;
 
     // get lines, last 4 lines are optional.
     string utf8Line[6];
@@ -362,6 +360,9 @@ namespace PYXBMC
       if (unicodeLine[i] && !PyXBMCGetUnicodeString(utf8Line[i], unicodeLine[i], i+1))
         return NULL;
     }
+    PyXBMCGUILock();
+    CGUIDialogYesNo* pDialog = (CGUIDialogYesNo*)g_windowManager.GetWindow(window);
+    if (PyXBMCWindowIsNull(pDialog)) return NULL;
     pDialog->SetHeading(utf8Line[0]);
     pDialog->SetLine(0, utf8Line[1]);
     pDialog->SetLine(1, utf8Line[2]);
@@ -370,11 +371,15 @@ namespace PYXBMC
       pDialog->SetChoice(0,utf8Line[4]);
     if (utf8Line[5] != "")
       pDialog->SetChoice(1,utf8Line[5]);
+    PyXBMCGUIUnlock();
 
     //send message and wait for user input
     PyXBMCWaitForThreadMessage(TMSG_DIALOG_DOMODAL, window, ACTIVE_WINDOW);
+    PyXBMCGUILock();
+    bool result = pDialog->IsConfirmed();
+    PyXBMCGUIUnlock();
 
-    return Py_BuildValue((char*)"b", pDialog->IsConfirmed());
+    return Py_BuildValue((char*)"b", result);
   }
 
   PyDoc_STRVAR(select__doc__,
@@ -400,6 +405,7 @@ namespace PYXBMC
     if (!PyArg_ParseTuple(args, (char*)"OO|i", &heading, &list, &autoClose))  return NULL;
     if (!PyList_Check(list)) return NULL;
 
+    PyXBMCGUILock();
     CGUIDialogSelect* pDialog= (CGUIDialogSelect*)g_windowManager.GetWindow(window);
     if (PyXBMCWindowIsNull(pDialog)) return NULL;
 
@@ -419,10 +425,15 @@ namespace PYXBMC
     if (autoClose > 0)
       pDialog->SetAutoClose(autoClose);
 
+    PyXBMCGUIUnlock();
+
     //send message and wait for user input
     PyXBMCWaitForThreadMessage(TMSG_DIALOG_DOMODAL, window, ACTIVE_WINDOW);
 
-    return Py_BuildValue((char*)"i", pDialog->GetSelectedLabel());
+    PyXBMCGUILock();
+    int result = pDialog->GetSelectedLabel();
+    PyXBMCGUIUnlock();
+    return Py_BuildValue((char*)"i", result);
   }
 
 /*****************************************************************
@@ -458,16 +469,28 @@ namespace PYXBMC
         return NULL;
     }
 
-    CGUIDialogProgress* pDialog= (CGUIDialogProgress*)g_windowManager.GetWindow(WINDOW_DIALOG_PROGRESS);
-    if (PyXBMCWindowIsNull(pDialog)) return NULL;
-    ((DialogProgress*)self)->dlg = pDialog;
+    CGUIDialogProgress* pDialog;
+    {
+      CPyThreadState releaseGil;
+      CSingleLock glock(g_graphicsContext);
 
-    pDialog->SetHeading(utf8Line[0]);
+      pDialog= (CGUIDialogProgress*)g_windowManager.GetWindow(WINDOW_DIALOG_PROGRESS);
+      if (!pDialog)
+      {
+        glock.Leave();
+        releaseGil.Restore();
+        PyErr_SetString(PyExc_SystemError, "Error: Window is NULL, this is not possible :-)");
+        return NULL;
+      }
+      ((DialogProgress*)self)->dlg = pDialog;
 
-    for (int i = 1; i < 4; i++)
-      pDialog->SetLine(i - 1,utf8Line[i]);
+      pDialog->SetHeading(utf8Line[0]);
 
-    pDialog->StartModal();
+      for (int i = 1; i < 4; i++)
+        pDialog->SetLine(i - 1,utf8Line[i]);
+
+      pDialog->StartModal();
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -500,6 +523,7 @@ namespace PYXBMC
         return NULL;
     }
 
+    PyXBMCGUILock();
     CGUIDialogProgress* pDialog= ((DialogProgress*)self)->dlg;
     if (PyXBMCWindowIsNull(pDialog)) return NULL;
 
@@ -517,6 +541,7 @@ namespace PYXBMC
       if (unicodeLine[i])
         pDialog->SetLine(i,utf8Line[i]);
     }
+    PyXBMCGUIUnlock();
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -534,7 +559,9 @@ namespace PYXBMC
     CGUIDialogProgress* pDialog= ((DialogProgress*)self)->dlg;
     if (PyXBMCWindowIsNull(pDialog)) return NULL;
 
+    PyXBMCGUILock();
     canceled = pDialog->IsCanceled();
+    PyXBMCGUIUnlock();
 
     return Py_BuildValue((char*)"b", canceled);
   }
@@ -551,7 +578,10 @@ namespace PYXBMC
     CGUIDialogProgress* pDialog= ((DialogProgress*)self)->dlg;
     if (PyXBMCWindowIsNull(pDialog)) return NULL;
 
-    pDialog->Close();
+    {
+      CPyThreadState state;
+      pDialog->Close();
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -560,9 +590,12 @@ namespace PYXBMC
   static void Dialog_ProgressDealloc(PyObject *self)
   {
     CGUIDialogProgress* pDialog= ((DialogProgress*)self)->dlg;
-    if(pDialog)
+    if (pDialog)
+    {
+      CPyThreadState state;
       pDialog->Close();
-
+    }
+    
     self->ob_type->tp_free((PyObject*)self);
   }
 
@@ -599,12 +632,6 @@ namespace PYXBMC
     "DialogProgress class.\n");
 
 // Restore code and data sections to normal.
-#ifndef __GNUC__
-#pragma code_seg()
-#pragma data_seg()
-#pragma bss_seg()
-#pragma const_seg()
-#endif
 
   PyTypeObject WindowDialog_Type;
 

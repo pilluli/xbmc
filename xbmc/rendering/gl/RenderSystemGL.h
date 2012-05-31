@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "system.h"
+#include "system_gl.h"
 #include "rendering/RenderSystem.h"
 
 class CRenderSystemGL : public CRenderSystemBase
@@ -38,7 +40,7 @@ public:
 
   virtual bool BeginRender();
   virtual bool EndRender();
-  virtual bool PresentRender();
+  virtual bool PresentRender(const CDirtyRegionList& dirty);
   virtual bool ClearBuffers(color_t color);
   virtual bool IsExtSupported(const char* extension);
 
@@ -60,13 +62,15 @@ public:
 
   virtual bool TestRender();
 
+  virtual void Project(float &x, float &y, float &z);
+
   virtual void GetGLSLVersion(int& major, int& minor);
 
   virtual void ResetGLErrors();
 
 protected:
   virtual void SetVSyncImpl(bool enable) = 0;
-  virtual bool PresentRenderImpl() = 0;
+  virtual bool PresentRenderImpl(const CDirtyRegionList& dirty) = 0;
   void CalculateMaxTexturesize();
 
   int        m_iVSyncMode;
@@ -82,6 +86,10 @@ protected:
 
   int        m_glslMajor;
   int        m_glslMinor;
+  
+  GLdouble   m_view[16];
+  GLdouble   m_projection[16];
+  GLint      m_viewPort[4];
 };
 
 #endif // RENDER_SYSTEM_H

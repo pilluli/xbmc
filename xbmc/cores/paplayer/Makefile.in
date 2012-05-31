@@ -6,6 +6,7 @@ CFLAGS+=-DHAS_ALSA
 
 SRCS=ADPCMCodec.cpp \
      AudioDecoder.cpp \
+     BXAcodec.cpp \
      CDDAcodec.cpp \
      CodecFactory.cpp \
      DVDPlayerCodec.cpp \
@@ -16,6 +17,7 @@ SRCS=ADPCMCodec.cpp \
      OggCallback.cpp \
      OGGcodec.cpp \
      PAPlayer.cpp \
+     PCMCodec.cpp \
      ReplayGain.cpp \
      SIDCodec.cpp \
      TimidityCodec.cpp \

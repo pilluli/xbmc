@@ -58,13 +58,10 @@ CGUIDialogMediaSource::~CGUIDialogMediaSource()
   delete m_paths;
 }
 
-bool CGUIDialogMediaSource::OnAction(const CAction &action)
+bool CGUIDialogMediaSource::OnBack(int actionID)
 {
-  if (action.GetID() == ACTION_PREVIOUS_MENU)
-  {
-    m_confirmed = false;
-  }
-  return CGUIDialog::OnAction(action);
+  m_confirmed = false;
+  return CGUIDialog::OnBack(actionID);
 }
 
 bool CGUIDialogMediaSource::OnMessage(CGUIMessage& message)
@@ -98,7 +95,6 @@ bool CGUIDialogMediaSource::OnMessage(CGUIMessage& message)
   case GUI_MSG_WINDOW_INIT:
     {
       m_confirmed = false;
-      m_bRunScan = false;
       m_bNameChanged=false;
       UpdateButtons();
     }
@@ -152,16 +148,6 @@ bool CGUIDialogMediaSource::ShowAndAddMediaSource(const CStdString &type)
       share.m_strThumbnailImage = dialog->m_paths->Get(0)->GetThumbnailImage();
     }
     g_settings.AddShare(type, share);
-
-    if (type == "video")
-    {
-      if (dialog->m_bRunScan)
-      {
-        CGUIDialogVideoScan* scanner = (CGUIDialogVideoScan*)g_windowManager.GetWindow(WINDOW_DIALOG_VIDEO_SCAN);
-        if (scanner)
-          scanner->StartScanning(share.strPath, true);
-      }
-    }
   }
   dialog->m_paths->Clear();
   return confirmed;
@@ -229,7 +215,7 @@ void CGUIDialogMediaSource::OnPathBrowse(int item)
   bool allowNetworkShares(m_type != "programs");
   VECSOURCES extraShares;
 
-  if (m_name != CUtil::GetTitleFromPath(m_paths->Get(item)->m_strPath))
+  if (m_name != CUtil::GetTitleFromPath(m_paths->Get(item)->GetPath()))
     m_bNameChanged=true;
 
   if (m_type == "music")
@@ -240,20 +226,8 @@ void CGUIDialogMediaSource::OnPathBrowse(int item)
     share1.m_ignore = true;
     extraShares.push_back(share1);
 
-    share1.strPath = "smb://";
-    share1.strName = g_localizeStrings.Get(20171);
-    extraShares.push_back(share1);
-
-    share1.strPath = "upnp://";
-    share1.strName = "UPnP Devices";
-    extraShares.push_back(share1);
-
     share1.strPath = "sap://";
     share1.strName = "SAP Streams";
-    extraShares.push_back(share1);
-
-    share1.strPath = "zeroconf://";
-    share1.strName = "Zeroconf Browser";
     extraShares.push_back(share1);
 
     if (g_guiSettings.GetString("audiocds.recordingpath",false) != "")
@@ -282,24 +256,12 @@ void CGUIDialogMediaSource::OnPathBrowse(int item)
     share1.strName = "ReplayTV Devices";
     extraShares.push_back(share1);
 
-    share1.strPath = "smb://";
-    share1.strName = g_localizeStrings.Get(20171);
-    extraShares.push_back(share1);
-
     share1.strPath = "hdhomerun://";
     share1.strName = "HDHomerun Devices";
     extraShares.push_back(share1);
 
     share1.strPath = "sap://";
     share1.strName = "SAP Streams";
-    extraShares.push_back(share1);
-
-    share1.strPath = "upnp://";
-    share1.strName = "UPnP Devices";
-    extraShares.push_back(share1);
-
-    share1.strPath = "zeroconf://";
-    share1.strName = "Zeroconf Browser";
     extraShares.push_back(share1);
   }
   else if (m_type == "pictures")
@@ -312,18 +274,6 @@ void CGUIDialogMediaSource::OnPathBrowse(int item)
       share1.strName = g_localizeStrings.Get(20008);
       extraShares.push_back(share1);
     }
-
-    share1.strPath = "smb://";
-    share1.strName = g_localizeStrings.Get(20171);
-    extraShares.push_back(share1);
-
-    share1.strPath = "upnp://";
-    share1.strName = "UPnP Devices";
-    extraShares.push_back(share1);
-
-    share1.strPath = "zeroconf://";
-    share1.strName = "Zeroconf Browser";
-    extraShares.push_back(share1);
   }
   else if (m_type == "programs")
   {
@@ -332,7 +282,7 @@ void CGUIDialogMediaSource::OnPathBrowse(int item)
   if (CGUIDialogFileBrowser::ShowAndGetSource(path, allowNetworkShares, extraShares.size()==0?NULL:&extraShares))
   {
     if (item < m_paths->Size()) // if the skin does funky things, m_paths may have been cleared
-      m_paths->Get(item)->m_strPath = path;
+      m_paths->Get(item)->SetPath(path);
     if (!m_bNameChanged || m_name.IsEmpty())
     {
       CURL url(path);
@@ -348,15 +298,17 @@ void CGUIDialogMediaSource::OnPath(int item)
 {
   if (item < 0 || item > m_paths->Size()) return;
 
-  if (m_name != CUtil::GetTitleFromPath(m_paths->Get(item)->m_strPath))
+  if (m_name != CUtil::GetTitleFromPath(m_paths->Get(item)->GetPath()))
     m_bNameChanged=true;
 
-  CGUIDialogKeyboard::ShowAndGetInput(m_paths->Get(item)->m_strPath, g_localizeStrings.Get(1021), false);
-  URIUtils::AddSlashAtEnd(m_paths->Get(item)->m_strPath);
+  CStdString path(m_paths->Get(item)->GetPath());
+  CGUIDialogKeyboard::ShowAndGetInput(path, g_localizeStrings.Get(1021), false);
+  URIUtils::AddSlashAtEnd(path);
+  m_paths->Get(item)->SetPath(path);
 
   if (!m_bNameChanged || m_name.IsEmpty())
   {
-    CURL url(m_paths->Get(item)->m_strPath);
+    CURL url(m_paths->Get(item)->GetPath());
     m_name = url.GetWithoutUserDetails();
     URIUtils::RemoveSlashAtEnd(m_name);
     m_name = CUtil::GetTitleFromPath(m_name);
@@ -375,14 +327,14 @@ void CGUIDialogMediaSource::OnOK()
   VECSOURCES *shares = g_settings.GetSourcesFromType(m_type);
   if (shares)
     shares->push_back(share);
-  if (share.strPath.Left(9).Equals("plugin://") || CDirectory::GetDirectory(share.strPath, items, "", false, true) || CGUIDialogYesNo::ShowAndGetInput(1001,1025,1003,1004))
+  if (share.strPath.Left(9).Equals("plugin://") || CDirectory::GetDirectory(share.strPath, items, "", DIR_FLAG_NO_FILE_DIRS | DIR_FLAG_ALLOW_PROMPT) || CGUIDialogYesNo::ShowAndGetInput(1001,1025,1003,1004))
   {
     m_confirmed = true;
     Close();
     if (m_type == "video" && !URIUtils::IsLiveTV(share.strPath) && 
         !share.strPath.Left(6).Equals("rss://"))
     {
-      CGUIWindowVideoBase::OnAssignContent(share.strPath, 0, m_info, m_settings);
+      CGUIWindowVideoBase::OnAssignContent(share.strPath);
     }
   }
 
@@ -402,7 +354,8 @@ void CGUIDialogMediaSource::UpdateButtons()
   if (!m_paths->Size()) // sanity
     return;
 
-  CONTROL_ENABLE_ON_CONDITION(CONTROL_OK, !m_paths->Get(0)->m_strPath.IsEmpty() && !m_name.IsEmpty());
+  CONTROL_ENABLE_ON_CONDITION(CONTROL_OK, !m_paths->Get(0)->GetPath().IsEmpty() && !m_name.IsEmpty());
+  CONTROL_ENABLE_ON_CONDITION(CONTROL_PATH_ADD, !m_paths->Get(0)->GetPath().IsEmpty());
   CONTROL_ENABLE_ON_CONDITION(CONTROL_PATH_REMOVE, m_paths->Size() > 1);
   // name
   SET_CONTROL_LABEL2(CONTROL_NAME, m_name);
@@ -414,7 +367,7 @@ void CGUIDialogMediaSource::UpdateButtons()
   {
     CFileItemPtr item = m_paths->Get(i);
     CStdString path;
-    CURL url(item->m_strPath);
+    CURL url(item->GetPath());
     path = url.GetWithoutUserDetails();
     if (path.IsEmpty()) path = "<"+g_localizeStrings.Get(231)+">"; // <None>
     item->SetLabel(path);
@@ -514,7 +467,7 @@ vector<CStdString> CGUIDialogMediaSource::GetPaths()
 {
   vector<CStdString> paths;
   for (int i = 0; i < m_paths->Size(); i++)
-    if (!m_paths->Get(i)->m_strPath.IsEmpty())
-      paths.push_back(m_paths->Get(i)->m_strPath);
+    if (!m_paths->Get(i)->GetPath().IsEmpty())
+      paths.push_back(m_paths->Get(i)->GetPath());
   return paths;
 }

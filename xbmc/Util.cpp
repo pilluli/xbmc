@@ -18,6 +18,7 @@
  *  http://www.gnu.org/copyleft/gpl.html
  *
  */
+#include "threads/SystemClock.h"
 #include "system.h"
 #ifdef __APPLE__
 #include <sys/param.h>
@@ -98,8 +99,8 @@ using namespace std;
 using namespace XFILE;
 
 #define clamp(x) (x) > 255.f ? 255 : ((x) < 0 ? 0 : (BYTE)(x+0.5f)) // Valid ranges: brightness[-1 -> 1 (0 is default)] contrast[0 -> 2 (1 is default)]  gamma[0.5 -> 3.5 (1 is default)] default[ramp is linear]
-static const __int64 SECS_BETWEEN_EPOCHS = 11644473600LL;
-static const __int64 SECS_TO_100NS = 10000000;
+static const int64_t SECS_BETWEEN_EPOCHS = 11644473600LL;
+static const int64_t SECS_TO_100NS = 10000000;
 
 using namespace AUTOPTR;
 using namespace XFILE;
@@ -222,7 +223,7 @@ CStdString CUtil::GetTitleFromPath(const CStdString& strFileNameAndPath, bool bI
   else if (path.Left(24).Equals("special://videoplaylists"))
     strFilename = g_localizeStrings.Get(136);
 
-  else if ((url.GetProtocol() == "rar" || url.GetProtocol() == "zip") && strFilename.IsEmpty())
+  else if (URIUtils::ProtocolHasParentInHostname(url.GetProtocol()) && strFilename.IsEmpty())
     strFilename = URIUtils::GetFileName(url.GetHostName());
 
   // now remove the extension if needed
@@ -401,20 +402,19 @@ void CUtil::CleanString(const CStdString& strFileName, CStdString& strTitle, CSt
 
 void CUtil::GetQualifiedFilename(const CStdString &strBasePath, CStdString &strFilename)
 {
-  //Make sure you have a full path in the filename, otherwise adds the base path before.
+  // Check if the filename is a fully qualified URL such as protocol://path/to/file
   CURL plItemUrl(strFilename);
+  if (!plItemUrl.GetProtocol().IsEmpty())
+    return;
 
-  if (!plItemUrl.IsLocal())
-    return; // non-local path, don't do anything
-  else if (strFilename.size() > 1)
-  { // local path - see if it's fully qualified
+  // If the filename starts "x:", "\\" or "/" it's already fully qualified so return
+  if (strFilename.size() > 1)
 #ifdef _LINUX
     if ( (strFilename[1] == ':') || (strFilename[0] == '/') )
 #else
-    if ( strFilename[1] == ':' )
+    if ( strFilename[1] == ':' || (strFilename[0] == '\\' && strFilename[1] == '\\'))
 #endif
       return;
-  }
 
   // add to base path and then clean
   strFilename = URIUtils::AddFileToFolder(strBasePath, strFilename);
@@ -452,6 +452,27 @@ bool CUtil::TestGetQualifiedFilename()
   if (file != "smb://my/foo/bar") return false;
   file = "smb://foo/bar/"; GetQualifiedFilename("upnp://", file);
   if (file != "smb://foo/bar/") return false;
+  return true;
+}
+
+bool CUtil::TestMakeLegalPath()
+{
+  CStdString path;
+#ifdef _WIN32
+  path = "C:\\foo\\bar"; path = MakeLegalPath(path);
+  if (path != "C:\\foo\\bar") return false;
+  path = "C:\\foo:\\bar\\"; path = MakeLegalPath(path);
+  if (path != "C:\\foo_\\bar\\") return false;
+#elif
+  path = "/foo/bar/"; path = MakeLegalPath(path);
+  if (path != "/foo/bar/") return false;
+  path = "/foo?/bar"; path = MakeLegalPath(path);
+  if (path != "/foo_/bar") return false;
+#endif
+  path = "smb://foo/bar"; path = MakeLegalPath(path);
+  if (path != "smb://foo/bar") return false;
+  path = "smb://foo/bar?/"; path = MakeLegalPath(path);
+  if (path != "smb://foo/bar_/") return false;
   return true;
 }
 #endif
@@ -689,14 +710,14 @@ void CUtil::RemoveTempFiles()
 {
   CStdString searchPath = g_settings.GetDatabaseFolder();
   CFileItemList items;
-  if (!XFILE::CDirectory::GetDirectory(searchPath, items, ".tmp", false))
+  if (!XFILE::CDirectory::GetDirectory(searchPath, items, ".tmp", DIR_FLAG_NO_FILE_DIRS))
     return;
 
   for (int i = 0; i < items.Size(); ++i)
   {
     if (items[i]->m_bIsFolder)
       continue;
-    XFILE::CFile::Delete(items[i]->m_strPath);
+    XFILE::CFile::Delete(items[i]->GetPath());
   }
 }
 
@@ -709,12 +730,30 @@ void CUtil::ClearSubtitles()
   {
     if (!items[i]->m_bIsFolder)
     {
-      if ( items[i]->m_strPath.Find("subtitle") >= 0 || items[i]->m_strPath.Find("vobsub_queue") >= 0 )
+      if ( items[i]->GetPath().Find("subtitle") >= 0 || items[i]->GetPath().Find("vobsub_queue") >= 0 )
       {
-        CLog::Log(LOGDEBUG, "%s - Deleting temporary subtitle %s", __FUNCTION__, items[i]->m_strPath.c_str());
-        CFile::Delete(items[i]->m_strPath);
+        CLog::Log(LOGDEBUG, "%s - Deleting temporary subtitle %s", __FUNCTION__, items[i]->GetPath().c_str());
+        CFile::Delete(items[i]->GetPath());
       }
     }
+  }
+}
+
+void CUtil::ClearTempFonts()
+{
+  CStdString searchPath = "special://temp/fonts/";
+
+  if (!CFile::Exists(searchPath))
+    return;
+
+  CFileItemList items;
+  CDirectory::GetDirectory(searchPath, items, "", DIR_FLAG_NO_FILE_DIRS | DIR_FLAG_BYPASS_CACHE);
+
+  for (int i=0; i<items.Size(); ++i)
+  {
+    if (items[i]->m_bIsFolder)
+      continue;
+    CFile::Delete(items[i]->GetPath());
   }
 }
 
@@ -749,22 +788,6 @@ bool CUtil::ThumbCached(const CStdString& strFileName)
   return CThumbnailCache::GetThumbnailCache()->IsCached(strFileName);
 }
 
-void CUtil::PlayDVD(const CStdString& strProtocol, bool restart)
-{
-#if defined(HAS_DVDPLAYER) && defined(HAS_DVD_DRIVE)
-  CIoSupport::Dismount("Cdrom0");
-  CIoSupport::RemapDriveLetter('D', "Cdrom0");
-  CStdString strPath;
-  strPath.Format("%s://1", strProtocol.c_str());
-  CFileItem item(strPath, false);
-  item.SetLabel(g_mediaManager.GetDiskLabel());
-  item.GetVideoInfoTag()->m_strFileNameAndPath = "removable://"; // need to put volume label for resume point in videoInfoTag
-  item.GetVideoInfoTag()->m_strFileNameAndPath += g_mediaManager.GetDiskLabel();
-  if (!restart) item.m_lStartOffset = STARTOFFSET_RESUME;
-  g_application.PlayFile(item, restart);
-#endif
-}
-
 CStdString CUtil::GetNextFilename(const CStdString &fn_template, int max)
 {
   if (!fn_template.Find("%03d"))
@@ -778,7 +801,7 @@ CStdString CUtil::GetNextFilename(const CStdString &fn_template, int max)
   name.Format(fn_template.c_str(), 0);
 
   CFileItemList items;
-  if (!CDirectory::GetDirectory(searchPath, items, mask, false))
+  if (!CDirectory::GetDirectory(searchPath, items, mask, DIR_FLAG_NO_FILE_DIRS))
     return name;
 
   items.SetFastLookup(true);
@@ -912,7 +935,17 @@ void CUtil::TakeScreenshot(const CStdString &filename, bool sync)
   //make a new buffer and copy the read image to it with the Y axis inverted
   outpixels = new unsigned char[stride * height];
   for (int y = 0; y < height; y++)
+  {
+#ifdef HAS_GLES
+    // we need to save in BGRA order so XOR Swap RGBA -> BGRA
+    unsigned char* swap_pixels = pixels + (height - y - 1) * stride;
+    for (int x = 0; x < width; x++, swap_pixels+=4)
+    {
+      std::swap(swap_pixels[0], swap_pixels[2]);
+    }   
+#endif
     memcpy(outpixels + y * stride, pixels + (height - y - 1) * stride, stride);
+  }
 
   delete [] pixels;
 
@@ -1145,34 +1178,19 @@ bool CUtil::CreateDirectoryEx(const CStdString& strPath)
   // return true if directory already exist
   if (CDirectory::Exists(strPath)) return true;
 
-  // we currently only allow HD and smb and nfs paths
-  if (!URIUtils::IsHD(strPath) && !URIUtils::IsSmb(strPath) && !URIUtils::IsNfs(strPath))
+  // we currently only allow HD and smb, nfs and afp paths
+  if (!URIUtils::IsHD(strPath) && !URIUtils::IsSmb(strPath) && !URIUtils::IsNfs(strPath) && !URIUtils::IsAfp(strPath))
   {
     CLog::Log(LOGERROR,"%s called with an unsupported path: %s", __FUNCTION__, strPath.c_str());
     return false;
   }
 
-  CURL url(strPath);
-  // silly CStdString can't take a char in the constructor
-  CStdString sep(1, url.GetDirectorySeparator());
-
-  // split the filename portion of the URL up into separate dirs
-  CStdStringArray dirs;
-  StringUtils::SplitString(url.GetFileName(), sep, dirs);
-
-  // we start with the root path
-  CStdString dir = url.GetWithoutFilename();
-  unsigned int i = 0;
-  if (dir.IsEmpty())
-  { // local directory - start with the first dirs member so that
-    // we ensure CUtil::AddFileToFolder() below has something to work with
-    dir = dirs[i++] + sep;
-  }
-  // and append the rest of the directories successively, creating each dir
-  // as we go
-  for (; i < dirs.size(); i++)
+  CStdStringArray dirs = URIUtils::SplitPath(strPath);
+  CStdString dir(dirs.front());
+  URIUtils::AddSlashAtEnd(dir);
+  for (CStdStringArray::iterator it = dirs.begin() + 1; it != dirs.end(); it ++)
   {
-    dir = URIUtils::AddFileToFolder(dir, dirs[i]);
+    dir = URIUtils::AddFileToFolder(dir, *it);
     CDirectory::Create(dir);
   }
 
@@ -1205,14 +1223,27 @@ CStdString CUtil::MakeLegalFileName(const CStdString &strFile, int LegalType)
   return result;
 }
 
-// same as MakeLegalFileName, but we assume that we're passed a complete path,
-// and just legalize the filename
+// legalize entire path
 CStdString CUtil::MakeLegalPath(const CStdString &strPathAndFile, int LegalType)
 {
-  CStdString strPath;
-  URIUtils::GetDirectory(strPathAndFile,strPath);
-  CStdString strFileName = URIUtils::GetFileName(strPathAndFile);
-  return strPath + MakeLegalFileName(strFileName, LegalType);
+  if (URIUtils::IsStack(strPathAndFile))
+    return MakeLegalPath(CStackDirectory::GetFirstStackedFile(strPathAndFile));
+  if (URIUtils::IsMultiPath(strPathAndFile))
+    return MakeLegalPath(CMultiPathDirectory::GetFirstPath(strPathAndFile));
+  if (!URIUtils::IsHD(strPathAndFile) && !URIUtils::IsSmb(strPathAndFile) && !URIUtils::IsNfs(strPathAndFile) && !URIUtils::IsAfp(strPathAndFile))
+    return strPathAndFile; // we don't support writing anywhere except HD, SMB, NFS and AFP - no need to legalize path
+
+  bool trailingSlash = URIUtils::HasSlashAtEnd(strPathAndFile);
+  CStdStringArray dirs = URIUtils::SplitPath(strPathAndFile);
+  // we just add first token to path and don't legalize it - possible values: 
+  // "X:" (local win32), "" (local unix - empty string before '/') or
+  // "protocol://domain"
+  CStdString dir(dirs.front());
+  URIUtils::AddSlashAtEnd(dir);
+  for (CStdStringArray::iterator it = dirs.begin() + 1; it != dirs.end(); it ++)
+    dir = URIUtils::AddFileToFolder(dir, MakeLegalFileName(*it, LegalType));
+  if (trailingSlash) URIUtils::AddSlashAtEnd(dir);
+  return dir;
 }
 
 CStdString CUtil::ValidatePath(const CStdString &path, bool bFixDoubleSlashes /* = false */)
@@ -1227,6 +1258,7 @@ CStdString CUtil::ValidatePath(const CStdString &path, bool bFixDoubleSlashes /*
       path.Left(4).Equals("zip:") ||
       path.Left(4).Equals("rar:") ||
       path.Left(6).Equals("stack:") ||
+      path.Left(7).Equals("bluray:") ||
       path.Left(10).Equals("multipath:") ))
     return result;
 
@@ -1322,7 +1354,11 @@ void CUtil::SplitExecFunction(const CStdString &execString, CStdString &function
   if( function.Left(5).Equals("xbmc.", false) )
     function.Delete(0, 5);
 
-  // now split up our parameters - we may have quotes to deal with as well as brackets and whitespace
+  SplitParams(paramString, parameters);
+}
+
+void CUtil::SplitParams(const CStdString &paramString, std::vector<CStdString> &parameters)
+{
   bool inQuotes = false;
   bool lastEscaped = false; // only every second character can be escaped
   int inFunction = 0;
@@ -1355,7 +1391,7 @@ void CUtil::SplitExecFunction(const CStdString &execString, CStdString &function
       { // start of function
         inFunction++;
       }
-      if (!inFunction && !URIUtils::IsStack(paramString) && ch == ',')
+      if (!inFunction && ch == ',')
       { // not in a function, so a comma signfies the end of this parameter
         if (whiteSpacePos)
           parameter = parameter.Left(whiteSpacePos);
@@ -1386,7 +1422,7 @@ void CUtil::SplitExecFunction(const CStdString &execString, CStdString &function
     parameter += ch;
   }
   if (inFunction || inQuotes)
-    CLog::Log(LOGWARNING, "%s(%s) - end of string while searching for ) or \"", __FUNCTION__, execString.c_str());
+    CLog::Log(LOGWARNING, "%s(%s) - end of string while searching for ) or \"", __FUNCTION__, paramString.c_str());
   if (whiteSpacePos)
     parameter = parameter.Left(whiteSpacePos);
   // trim off start and end quotes
@@ -1541,7 +1577,7 @@ int CUtil::GetMatchingSource(const CStdString& strPath1, VECSOURCES& VECSOURCES,
       return GetMatchingSource(strPath, VECSOURCES, bDummy);
     }
 
-    CLog::Log(LOGWARNING,"CUtil::GetMatchingSource... no matching source found for [%s]", strPath1.c_str());
+    CLog::Log(LOGDEBUG,"CUtil::GetMatchingSource: no matching source found for [%s]", strPath1.c_str());
   }
   return iIndex;
 }
@@ -1603,27 +1639,29 @@ CStdString CUtil::VideoPlaylistsLocation()
 void CUtil::DeleteMusicDatabaseDirectoryCache()
 {
   CUtil::DeleteDirectoryCache("mdb-");
+  CUtil::DeleteDirectoryCache("sp-"); // overkill as it will delete video smartplaylists, but as we can't differentiate based on URL...
 }
 
 void CUtil::DeleteVideoDatabaseDirectoryCache()
 {
   CUtil::DeleteDirectoryCache("vdb-");
+  CUtil::DeleteDirectoryCache("sp-"); // overkill as it will delete music smartplaylists, but as we can't differentiate based on URL...
 }
 
 void CUtil::DeleteDirectoryCache(const CStdString &prefix)
 {
   CStdString searchPath = "special://temp/";
   CFileItemList items;
-  if (!XFILE::CDirectory::GetDirectory(searchPath, items, ".fi", false))
+  if (!XFILE::CDirectory::GetDirectory(searchPath, items, ".fi", DIR_FLAG_NO_FILE_DIRS))
     return;
 
   for (int i = 0; i < items.Size(); ++i)
   {
     if (items[i]->m_bIsFolder)
       continue;
-    CStdString fileName = URIUtils::GetFileName(items[i]->m_strPath);
+    CStdString fileName = URIUtils::GetFileName(items[i]->GetPath());
     if (fileName.Left(prefix.GetLength()) == prefix)
-      XFILE::CFile::Delete(items[i]->m_strPath);
+      XFILE::CFile::Delete(items[i]->GetPath());
   }
 }
 
@@ -1739,11 +1777,14 @@ int CUtil::GMTZoneCalc(int iRescBiases, int iHour, int iMinute, int &iMinuteNew)
 void CUtil::GetRecursiveListing(const CStdString& strPath, CFileItemList& items, const CStdString& strMask, bool bUseFileDirectories)
 {
   CFileItemList myItems;
-  CDirectory::GetDirectory(strPath,myItems,strMask,bUseFileDirectories);
+  int flags = DIR_FLAG_DEFAULTS;
+  if (!bUseFileDirectories)
+    flags |= DIR_FLAG_NO_FILE_DIRS;
+  CDirectory::GetDirectory(strPath,myItems,strMask,flags);
   for (int i=0;i<myItems.Size();++i)
   {
     if (myItems[i]->m_bIsFolder)
-      CUtil::GetRecursiveListing(myItems[i]->m_strPath,items,strMask,bUseFileDirectories);
+      CUtil::GetRecursiveListing(myItems[i]->GetPath(),items,strMask,bUseFileDirectories);
     else
       items.Add(myItems[i]);
   }
@@ -1752,13 +1793,13 @@ void CUtil::GetRecursiveListing(const CStdString& strPath, CFileItemList& items,
 void CUtil::GetRecursiveDirsListing(const CStdString& strPath, CFileItemList& item)
 {
   CFileItemList myItems;
-  CDirectory::GetDirectory(strPath,myItems,"",false);
+  CDirectory::GetDirectory(strPath,myItems,"",DIR_FLAG_NO_FILE_DIRS);
   for (int i=0;i<myItems.Size();++i)
   {
-    if (myItems[i]->m_bIsFolder && !myItems[i]->m_strPath.Equals(".."))
+    if (myItems[i]->m_bIsFolder && !myItems[i]->GetPath().Equals(".."))
     {
       item.Add(myItems[i]);
-      CUtil::GetRecursiveDirsListing(myItems[i]->m_strPath,item);
+      CUtil::GetRecursiveDirsListing(myItems[i]->GetPath(),item);
     }
   }
 }
@@ -1794,17 +1835,6 @@ double CUtil::AlbumRelevance(const CStdString& strAlbumTemp1, const CStdString& 
   }
   double fRelevance = fAlbumPercentage * 0.5f + fArtistPercentage * 0.5f;
   return fRelevance;
-}
-
-CStdString CUtil::SubstitutePath(const CStdString& strFileName)
-{
-  for (CAdvancedSettings::StringMapping::iterator i = g_advancedSettings.m_pathSubstitutions.begin(); 
-                                                  i != g_advancedSettings.m_pathSubstitutions.end(); i++)
-  {
-    if (strncmp(strFileName.c_str(), i->first.c_str(), i->first.size()) == 0)
-      return URIUtils::AddFileToFolder(i->second, strFileName.Mid(i->first.size()));
-  }
-  return strFileName;
 }
 
 bool CUtil::MakeShortenPath(CStdString StrInput, CStdString& StrOutput, int iTextMaxLength)
@@ -1865,12 +1895,14 @@ bool CUtil::MakeShortenPath(CStdString StrInput, CStdString& StrOutput, int iTex
 
 bool CUtil::SupportsFileOperations(const CStdString& strPath)
 {
-  // currently only hd, smb and nfs support delete and rename
+  // currently only hd, smb, nfs and afp support delete and rename
   if (URIUtils::IsHD(strPath))
     return true;
   if (URIUtils::IsSmb(strPath))
     return true;
   if (URIUtils::IsNfs(strPath))
+    return true;
+  if (URIUtils::IsAfp(strPath))
     return true;
   if (URIUtils::IsMythTV(strPath))
   {
@@ -1882,36 +1914,11 @@ bool CUtil::SupportsFileOperations(const CStdString& strPath)
     return CMythDirectory::SupportsFileOperations(strPath);
   }
   if (URIUtils::IsStack(strPath))
-  {
-    CStackDirectory dir;
-    return SupportsFileOperations(dir.GetFirstStackedFile(strPath));
-  }
+    return SupportsFileOperations(CStackDirectory::GetFirstStackedFile(strPath));
   if (URIUtils::IsMultiPath(strPath))
     return CMultiPathDirectory::SupportsFileOperations(strPath);
 
   return false;
-}
-
-CStdString CUtil::GetCachedAlbumThumb(const CStdString& album, const CStdString& artist)
-{
-  if (album.IsEmpty())
-    return GetCachedMusicThumb("unknown"+artist);
-  if (artist.IsEmpty())
-    return GetCachedMusicThumb(album+"unknown");
-  return GetCachedMusicThumb(album+artist);
-}
-
-CStdString CUtil::GetCachedMusicThumb(const CStdString& path)
-{
-  Crc32 crc;
-  CStdString noSlashPath(path);
-  URIUtils::RemoveSlashAtEnd(noSlashPath);
-  crc.ComputeFromLowerCase(noSlashPath);
-  CStdString hex;
-  hex.Format("%08x", (unsigned __int32) crc);
-  CStdString thumb;
-  thumb.Format("%c/%s.tbn", hex[0], hex.c_str());
-  return URIUtils::AddFileToFolder(g_settings.GetMusicThumbFolder(), thumb);
 }
 
 CStdString CUtil::GetDefaultFolderThumb(const CStdString &folderThumb)
@@ -1934,7 +1941,7 @@ void CUtil::GetSkinThemes(vector<CStdString>& vecTheme)
     if (!pItem->m_bIsFolder)
     {
       CStdString strExtension;
-      URIUtils::GetExtension(pItem->m_strPath, strExtension);
+      URIUtils::GetExtension(pItem->GetPath(), strExtension);
       if ((strExtension == ".xpr" && pItem->GetLabel().CompareNoCase("Textures.xpr")) ||
           (strExtension == ".xbt" && pItem->GetLabel().CompareNoCase("Textures.xbt")))
       {
@@ -2172,7 +2179,7 @@ CStdString CUtil::ResolveExecutablePath()
   CStdString strExecutablePath;
 #ifdef WIN32
   wchar_t szAppPathW[MAX_PATH] = L"";
-  ::GetModuleFileNameW(0, szAppPathW, sizeof(szAppPathW) - 1);
+  ::GetModuleFileNameW(0, szAppPathW, sizeof(szAppPathW)/sizeof(szAppPathW[0]) - 1);
   CStdStringW strPathW = szAppPathW;
   g_charsetConverter.wToUTF8(strPathW,strExecutablePath);
 #elif defined(__APPLE__)
@@ -2227,7 +2234,7 @@ CStdString CUtil::GetFrameworksPath(bool forPython)
 
 void CUtil::ScanForExternalSubtitles(const CStdString& strMovie, std::vector<CStdString>& vecSubtitles )
 {
-  unsigned int startTimer = CTimeUtils::GetTimeMS();
+  unsigned int startTimer = XbmcThreads::SystemClockMillis();
   
   // new array for commons sub dirs
   const char * common_sub_dirs[] = {"subs",
@@ -2287,20 +2294,25 @@ void CUtil::ScanForExternalSubtitles(const CStdString& strMovie, std::vector<CSt
     strLookInPaths.push_back(strPath);
   }
   
-  // checking if any of the common subdirs exist ..
-  CStdStringArray directories;
-  int nTokens = StringUtils::SplitString( strPath, "/", directories );
-  if (nTokens == 1)
-    StringUtils::SplitString( strPath, "\\", directories );
-  
-  // if it's inside a cdX dir, add parent path
-  if (directories[directories.size()-2].size() == 3 && directories[directories.size()-2].Left(2).Equals("cd")) // SplitString returns empty token as last item, hence size-2
-  {
-    CStdString strPath2;
-    URIUtils::GetParentPath(strPath,strPath2);
-    strLookInPaths.push_back(strPath2);
-  }
   int iSize = strLookInPaths.size();
+  for (int i=0; i<iSize; ++i)
+  {
+    CStdStringArray directories;
+    int nTokens = StringUtils::SplitString( strLookInPaths[i], "/", directories );
+    if (nTokens == 1)
+      StringUtils::SplitString( strLookInPaths[i], "\\", directories );
+
+    // if it's inside a cdX dir, add parent path
+    if (directories.size() >= 2 && directories[directories.size()-2].size() == 3 && directories[directories.size()-2].Left(2).Equals("cd")) // SplitString returns empty token as last item, hence size-2
+    {
+      CStdString strPath2;
+      URIUtils::GetParentPath(strLookInPaths[i], strPath2);
+      strLookInPaths.push_back(strPath2);
+    }
+  }
+
+  // checking if any of the common subdirs exist ..
+  iSize = strLookInPaths.size();
   for (int i=0;i<iSize;++i)
   {
     for (int j=0; common_sub_dirs[j]; j++)
@@ -2355,32 +2367,44 @@ void CUtil::ScanForExternalSubtitles(const CStdString& strMovie, std::vector<CSt
     {
       CFileItemList items;
       
-      CDirectory::GetDirectory(strLookInPaths[step], items,".utf|.utf8|.utf-8|.sub|.srt|.smi|.rt|.txt|.ssa|.text|.ssa|.aqt|.jss|.ass|.idx|.ifo|.rar|.zip",false);
+      CDirectory::GetDirectory(strLookInPaths[step], items,".utf|.utf8|.utf-8|.sub|.srt|.smi|.rt|.txt|.ssa|.text|.ssa|.aqt|.jss|.ass|.idx|.ifo|.rar|.zip",DIR_FLAG_NO_FILE_DIRS);
       int fnl = strMovieFileNameNoExt.size();
       
       for (int j = 0; j < items.Size(); j++)
       {
-        URIUtils::Split(items[j]->m_strPath, strPath, strItem);
+        URIUtils::Split(items[j]->GetPath(), strPath, strItem);
         
-        // is this a rar or zip-file
-        if (URIUtils::IsRAR(strItem) || URIUtils::IsZIP(strItem))
+        if (strItem.Left(fnl).Equals(strMovieFileNameNoExt))
         {
-          ScanArchiveForSubtitles( items[j]->m_strPath, strMovieFileNameNoExt, vecSubtitles );
-        }
-        else    // not a rar/zip file
-        {
-          for (int i = 0; sub_exts[i]; i++)
+          // is this a rar or zip-file
+          if (URIUtils::IsRAR(strItem) || URIUtils::IsZIP(strItem))
           {
-            //Cache subtitle with same name as movie
-            if (URIUtils::GetExtension(strItem).Equals(sub_exts[i]) && strItem.Left(fnl).Equals(strMovieFileNameNoExt))
+            // zip-file name equals strMovieFileNameNoExt, don't check in zip-file
+            ScanArchiveForSubtitles( items[j]->GetPath(), "", vecSubtitles );
+          }
+          else    // not a rar/zip file
+          {
+            for (int i = 0; sub_exts[i]; i++)
             {
-              vecSubtitles.push_back( items[j]->m_strPath ); 
-              CLog::Log(LOGINFO, "%s: found subtitle file %s\n", __FUNCTION__, items[j]->m_strPath.c_str() );
+              //Cache subtitle with same name as movie
+              if (URIUtils::GetExtension(strItem).Equals(sub_exts[i]))
+              {
+                vecSubtitles.push_back( items[j]->GetPath() ); 
+                CLog::Log(LOGINFO, "%s: found subtitle file %s\n", __FUNCTION__, items[j]->GetPath().c_str() );
+              }
             }
           }
         }
+        else
+        {
+          // is this a rar or zip-file
+          if (URIUtils::IsRAR(strItem) || URIUtils::IsZIP(strItem))
+          {
+            // check strMovieFileNameNoExt in zip-file
+            ScanArchiveForSubtitles( items[j]->GetPath(), strMovieFileNameNoExt, vecSubtitles );
+          }
+        }
       }
-      g_directoryCache.ClearDirectory(strLookInPaths[step]);
     }
   }
 
@@ -2411,7 +2435,7 @@ void CUtil::ScanForExternalSubtitles(const CStdString& strMovie, std::vector<CSt
       delete pStream;
     }
   }
-  CLog::Log(LOGDEBUG,"%s: END (total time: %i ms)", __FUNCTION__, (int)(CTimeUtils::GetTimeMS() - startTimer));
+  CLog::Log(LOGDEBUG,"%s: END (total time: %i ms)", __FUNCTION__, (int)(XbmcThreads::SystemClockMillis() - startTimer));
 }
 
 int CUtil::ScanArchiveForSubtitles( const CStdString& strArchivePath, const CStdString& strMovieFileNameNoExt, std::vector<CStdString>& vecSubtitles )
@@ -2424,7 +2448,7 @@ int CUtil::ScanArchiveForSubtitles( const CStdString& strArchivePath, const CStd
   {
    CStdString strZipPath;
    URIUtils::CreateArchivePath(strZipPath,"zip",strArchivePath,"");
-   if (!CDirectory::GetDirectory(strZipPath,ItemList,"",false))
+   if (!CDirectory::GetDirectory(strZipPath,ItemList,"",DIR_FLAG_NO_FILE_DIRS))
     return false;
   }
   else
@@ -2440,7 +2464,7 @@ int CUtil::ScanArchiveForSubtitles( const CStdString& strArchivePath, const CStd
   }
   for (int it= 0 ; it <ItemList.Size();++it)
   {
-   CStdString strPathInRar = ItemList[it]->m_strPath;
+   CStdString strPathInRar = ItemList[it]->GetPath();
    CStdString strExt = URIUtils::GetExtension(strPathInRar);
    
    CLog::Log(LOGDEBUG, "ScanArchiveForSubtitles:: Found file %s", strPathInRar.c_str());
@@ -2456,7 +2480,12 @@ int CUtil::ScanArchiveForSubtitles( const CStdString& strArchivePath, const CStd
     ScanArchiveForSubtitles(strRarInRar,strMovieFileNameNoExt,vecSubtitles);
    }
    // done checking if this is a rar-in-rar
-   
+
+   // check that the found filename matches the movie filename
+   int fnl = strMovieFileNameNoExt.size();
+   if (fnl && !URIUtils::GetFileName(strPathInRar).Left(fnl).Equals(strMovieFileNameNoExt))
+     continue;
+
    int iPos=0;
     while (sub_exts[iPos])
     {
@@ -2494,8 +2523,11 @@ bool CUtil::FindVobSubPair( const std::vector<CStdString>& vecSubtitles, const C
       CStdString strSubFile;
       CStdString strSubDirectory;
       URIUtils::Split(vecSubtitles[j], strSubDirectory, strSubFile);
+      if (URIUtils::IsInArchive(vecSubtitles[j]))
+        CURL::Decode(strSubDirectory);
       if (URIUtils::GetExtension(strSubFile) == ".sub" &&
-          URIUtils::ReplaceExtension(strIdxFile,"").Equals(URIUtils::ReplaceExtension(strSubFile,"")))
+          (URIUtils::ReplaceExtension(strIdxFile,"").Equals(URIUtils::ReplaceExtension(strSubFile,"")) ||
+           strSubDirectory.Mid(6, strSubDirectory.length()-11).Equals(URIUtils::ReplaceExtension(strIdxPath,""))))
       {
         strSubPath = vecSubtitles[j];
         return true;
@@ -2514,13 +2546,16 @@ bool CUtil::IsVobSub( const std::vector<CStdString>& vecSubtitles, const CStdStr
     CStdString strSubFile;
     CStdString strSubDirectory;
     URIUtils::Split(strSubPath, strSubDirectory, strSubFile);
+    if (URIUtils::IsInArchive(strSubPath))
+      CURL::Decode(strSubDirectory);
     for (unsigned int j=0; j < vecSubtitles.size(); j++)
     {
       CStdString strIdxFile;
       CStdString strIdxDirectory;
       URIUtils::Split(vecSubtitles[j], strIdxDirectory, strIdxFile);
       if (URIUtils::GetExtension(strIdxFile) == ".idx" &&
-          URIUtils::ReplaceExtension(strIdxFile,"").Equals(URIUtils::ReplaceExtension(strSubFile,"")))
+          (URIUtils::ReplaceExtension(strIdxFile,"").Equals(URIUtils::ReplaceExtension(strSubFile,"")) ||
+           strSubDirectory.Mid(6, strSubDirectory.length()-11).Equals(URIUtils::ReplaceExtension(vecSubtitles[j],""))))
         return true;
     }
   }

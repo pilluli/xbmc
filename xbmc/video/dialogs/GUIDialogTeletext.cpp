@@ -27,6 +27,7 @@
 #include "guilib/Texture.h"
 #include "settings/Settings.h"
 #include "guilib/LocalizeStrings.h"
+#include "dialogs/GUIDialogKaiToast.h"
 
 using namespace std;
 
@@ -45,16 +46,16 @@ CGUIDialogTeletext::~CGUIDialogTeletext()
 
 bool CGUIDialogTeletext::OnAction(const CAction& action)
 {
-  if (action.GetID() == ACTION_PREVIOUS_MENU || action.GetID() == ACTION_CLOSE_DIALOG)
-  {
-    m_bClose = true;
-    return true;
-  }
-
   if (m_TextDecoder.HandleAction(action))
     return true;
 
   return CGUIDialog::OnAction(action);
+}
+
+bool CGUIDialogTeletext::OnBack(int actionID)
+{
+  m_bClose = true;
+  return true;
 }
 
 bool CGUIDialogTeletext::OnMessage(CGUIMessage& message)
@@ -65,7 +66,7 @@ bool CGUIDialogTeletext::OnMessage(CGUIMessage& message)
     if (!g_application.m_pPlayer->GetTeletextCache())
     {
       Close();
-      g_application.m_guiDialogKaiToast.QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(23049), "", 1500, false);
+      CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(23049), "", 1500, false);
       return true;
     }
   }
@@ -116,11 +117,16 @@ void CGUIDialogTeletext::OnInitWindow()
   m_bClose            = false;
   m_windowLoaded      = true;
 
-  RESOLUTION res = g_graphicsContext.GetVideoResolution();
-  m_vertCoords.SetRect((float)g_settings.m_ResInfo[res].Overscan.left,
-                       (float)g_settings.m_ResInfo[res].Overscan.top,
-                       (float)g_settings.m_ResInfo[res].Overscan.right,
-                       (float)g_settings.m_ResInfo[res].Overscan.bottom);
+  g_graphicsContext.SetScalingResolution(m_coordsRes, m_needsScaling);
+  float left = g_graphicsContext.ScaleFinalXCoord(0, 0);
+  float right = g_graphicsContext.ScaleFinalXCoord((float)m_coordsRes.iWidth, 0);
+  float top = g_graphicsContext.ScaleFinalYCoord(0, 0);
+  float bottom = g_graphicsContext.ScaleFinalYCoord(0, (float)m_coordsRes.iHeight);
+
+  m_vertCoords.SetRect(left,
+                       top,
+                       right,
+                       bottom);
 
   if (!m_TextDecoder.InitDecoder())
   {

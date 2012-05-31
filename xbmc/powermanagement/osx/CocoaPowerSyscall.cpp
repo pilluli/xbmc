@@ -19,9 +19,9 @@
  *
  */
  
-#if defined (__APPLE__)
+#if defined (TARGET_DARWIN)
 // defined in PlatformDefs.h but I don't want to include that here
-typedef unsigned char   BYTE;
+typedef unsigned char BYTE;
 
 #include "utils/log.h"
 #include "utils/SystemInfo.h"
@@ -29,18 +29,50 @@ typedef unsigned char   BYTE;
 #include "powermanagement/PowerManager.h"
 #include "windowing/WindowingFactory.h"
 #include "CocoaPowerSyscall.h"
-#if !defined(__arm__)
-#include <IOKit/pwr_mgt/IOPMLib.h>
-#include <IOKit/ps/IOPowerSources.h>
-#include <IOKit/ps/IOPSKeys.h>
+
+#if defined(TARGET_DARWIN_OSX)
+  #include <IOKit/pwr_mgt/IOPMLib.h>
+  #include <IOKit/ps/IOPowerSources.h>
+  #include <IOKit/ps/IOPSKeys.h>
+  #include <ApplicationServices/ApplicationServices.h>
 #endif
 
-// missing in 10.4/10.5 SDKs.
-#if (MAC_OS_X_VERSION_MAX_ALLOWED < 1060)
-#define kIOPSNotifyLowBattery   "com.apple.system.powersources.lowbattery"
-#endif
+#include "osx/DarwinUtils.h"
 
 #include "CocoaInterface.h"
+
+#if defined(TARGET_DARWIN_OSX)
+OSStatus SendAppleEventToSystemProcess(AEEventID eventToSendID)
+{
+  AEAddressDesc targetDesc;
+  static const  ProcessSerialNumber kPSNOfSystemProcess = {0, kSystemProcess };
+  AppleEvent    eventReply  = {typeNull, NULL};
+  AppleEvent    eventToSend = {typeNull, NULL};
+
+  OSStatus status = AECreateDesc(typeProcessSerialNumber,
+    &kPSNOfSystemProcess, sizeof(kPSNOfSystemProcess), &targetDesc);
+
+  if (status != noErr)
+    return status;
+
+  status = AECreateAppleEvent(kCoreEventClass, eventToSendID,
+    &targetDesc, kAutoGenerateReturnID, kAnyTransactionID, &eventToSend);
+  AEDisposeDesc(&targetDesc);
+
+  if (status != noErr)
+    return status;
+
+  status = AESendMessage(&eventToSend, &eventReply, kAENormalPriority, kAEDefaultTimeout);
+  AEDisposeDesc(&eventToSend);
+
+  if (status != noErr)
+    return status;
+
+  AEDisposeDesc(&eventReply);
+
+  return status;
+}
+#endif
 
 CCocoaPowerSyscall::CCocoaPowerSyscall()
 {
@@ -51,7 +83,7 @@ CCocoaPowerSyscall::CCocoaPowerSyscall()
   m_HasBattery = -1;
   m_BatteryPercent = 100;
   m_SentBatteryMessage = false;
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
   m_power_source = NULL;
 #endif
   CreateOSPowerCallBacks();
@@ -66,7 +98,7 @@ CCocoaPowerSyscall::~CCocoaPowerSyscall()
 bool CCocoaPowerSyscall::Powerdown(void)
 {
   bool result;
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   result = false;
 #else
   if (g_sysinfo.IsAppleTV())
@@ -92,7 +124,7 @@ bool CCocoaPowerSyscall::Powerdown(void)
 
 bool CCocoaPowerSyscall::Suspend(void)
 {
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   return false;
 #else
   CLog::Log(LOGDEBUG, "CCocoaPowerSyscall::Suspend");
@@ -111,7 +143,7 @@ bool CCocoaPowerSyscall::Suspend(void)
 bool CCocoaPowerSyscall::Hibernate(void)
 {
   CLog::Log(LOGDEBUG, "CCocoaPowerSyscall::Hibernate");
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   return false;
 #else
   // just in case hibernate is ever called
@@ -123,7 +155,7 @@ bool CCocoaPowerSyscall::Reboot(void)
 {
   bool result;
   CLog::Log(LOGDEBUG, "CCocoaPowerSyscall::Reboot");
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   result = false;
 #else
   if (g_sysinfo.IsAppleTV())
@@ -147,7 +179,7 @@ bool CCocoaPowerSyscall::Reboot(void)
 
 bool CCocoaPowerSyscall::CanPowerdown(void)
 {
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   return false;
 #else
   // All Apple products can power down
@@ -158,7 +190,7 @@ bool CCocoaPowerSyscall::CanPowerdown(void)
 bool CCocoaPowerSyscall::CanSuspend(void)
 {
   bool result;
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   result = false;
 #else
   // Only OSX boxes can suspend, the AppleTV cannot
@@ -179,7 +211,7 @@ bool CCocoaPowerSyscall::CanHibernate(void)
 
 bool CCocoaPowerSyscall::CanReboot(void)
 {
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   return false;
 #else
   // All Apple products except iOS can reboot
@@ -190,7 +222,7 @@ bool CCocoaPowerSyscall::CanReboot(void)
 bool CCocoaPowerSyscall::HasBattery(void)
 {
   bool result;
-#if defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
   result = false;
 #else
   result = true;
@@ -222,6 +254,11 @@ bool CCocoaPowerSyscall::HasBattery(void)
   return result;
 }
 
+int CCocoaPowerSyscall::BatteryLevel(void)
+{
+  return DarwinBatteryLevel();
+}
+
 bool CCocoaPowerSyscall::PumpPowerEvents(IPowerEventsCallback *callback)
 {
   if (m_OnSuspend)
@@ -232,7 +269,7 @@ bool CCocoaPowerSyscall::PumpPowerEvents(IPowerEventsCallback *callback)
   else if (m_OnResume)
   {
     callback->OnWake();
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
     if (g_Windowing.IsFullScreen())
       Cocoa_HideDock();
 #endif
@@ -253,7 +290,7 @@ bool CCocoaPowerSyscall::PumpPowerEvents(IPowerEventsCallback *callback)
 
 void CCocoaPowerSyscall::CreateOSPowerCallBacks(void)
 {
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
   CCocoaAutoPool autopool;
   // we want sleep/wake notifications, register to receive system power notifications
   m_root_port = IORegisterForSystemPower(this, &m_notify_port, OSPowerCallBack, &m_notifier_object);
@@ -282,7 +319,7 @@ void CCocoaPowerSyscall::CreateOSPowerCallBacks(void)
 
 void CCocoaPowerSyscall::DeleteOSPowerCallBacks(void)
 {
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
   CCocoaAutoPool autopool;
   // we no longer want sleep/wake notifications
   // remove the sleep notification port from the application runloop
@@ -310,7 +347,7 @@ void CCocoaPowerSyscall::DeleteOSPowerCallBacks(void)
 
 void CCocoaPowerSyscall::OSPowerCallBack(void *refcon, io_service_t service, natural_t msg_type, void *msg_arg)
 {
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
   CCocoaAutoPool autopool;
   CCocoaPowerSyscall  *ctx;
   
@@ -351,7 +388,7 @@ void CCocoaPowerSyscall::OSPowerCallBack(void *refcon, io_service_t service, nat
 #endif
 }
 
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
 static bool stringsAreEqual(CFStringRef a, CFStringRef b)
 {
 	if (a == nil || b == nil) 
@@ -362,7 +399,7 @@ static bool stringsAreEqual(CFStringRef a, CFStringRef b)
 
 void CCocoaPowerSyscall::OSPowerSourceCallBack(void *refcon)
 {
-#if !defined(__arm__)
+#if !defined(TARGET_DARWIN_IOS)
   // Called whenever any power source is added, removed, or changes. 
   // When on battery, we get called periodically as battery level changes.
   CCocoaAutoPool autopool;

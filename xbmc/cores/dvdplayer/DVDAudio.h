@@ -24,9 +24,10 @@
 #if (defined HAVE_CONFIG_H) && (!defined WIN32)
   #include "config.h"
 #endif
-#include "cores/AudioRenderers/IAudioRenderer.h"
-#include "cores/IAudioCallback.h"
 #include "threads/CriticalSection.h"
+#include "PlatformDefs.h"
+
+#include "cores/AudioEngine/Interfaces/AEStream.h"
 
 #ifndef _LINUX
 enum CodecID;
@@ -53,14 +54,12 @@ public:
   CDVDAudio(volatile bool& bStop);
   ~CDVDAudio();
 
-  void RegisterAudioCallback(IAudioCallback* pCallback);
-  void UnRegisterAudioCallback();
-
-  void SetVolume(int iVolume);
+  void SetVolume(float fVolume);
   void SetDynamicRangeCompression(long drc);
+  float GetCurrentAttenuation();
   void Pause();
   void Resume();
-  bool Create(const DVDAudioFrame &audioframe, CodecID codec);
+  bool Create(const DVDAudioFrame &audioframe, CodecID codec, bool needresampler);
   bool IsValidFormat(const DVDAudioFrame &audioframe);
   void Destroy();
   DWORD AddPackets(const DVDAudioFrame &audioframe);
@@ -71,20 +70,22 @@ public:
   void Finish();
   void Drain();
 
-  IAudioRenderer* m_pAudioDecoder;
+  void SetSpeed(int iSpeed);
+  void SetResampleRatio(double ratio);
+
+  IAEStream *m_pAudioStream;
 protected:
   DWORD AddPacketsRenderer(unsigned char* data, DWORD len, CSingleLock &lock);
-  IAudioCallback* m_pCallback;
   BYTE* m_pBuffer; // should be [m_dwPacketSize]
   DWORD m_iBufferSize;
   DWORD m_dwPacketSize;
   CCriticalSection m_critSection;
 
-  int m_iChannels;
   int m_iBitrate;
   int m_iBitsPerSample;
   double m_SecondsPerByte;
   bool m_bPassthrough;
+  CAEChannelInfo m_channelLayout;
   bool m_bPaused;
 
   volatile bool& m_bStop;

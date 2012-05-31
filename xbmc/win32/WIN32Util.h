@@ -28,6 +28,7 @@
 #endif
 #include "MediaSource.h"
 #include "utils/Stopwatch.h"
+#include "guilib/Geometry.h"
 
 enum Drive_Types
 {
@@ -37,6 +38,8 @@ enum Drive_Types
   DVD_DRIVES
 };
 
+#define BONJOUR_EVENT             ( WM_USER + 0x100 )	// Message sent to the Window when a Bonjour event occurs.
+#define BONJOUR_BROWSER_EVENT     ( WM_USER + 0x110 )
 
 class CWIN32Util
 {
@@ -49,6 +52,7 @@ public:
   static char FirstDriveFromMask (ULONG unitmask);
   static int GetDriveStatus(const CStdString &strPath);
   static bool PowerManagement(PowerState State);
+  static int BatteryLevel();
   static bool XBMCShellExecute(const CStdString &strPath, bool bWaitForScriptExit=false);
   static std::vector<CStdString> GetDiskUsage();
   static CStdString GetResInfoString();
@@ -77,7 +81,12 @@ public:
   static bool UtilRegOpenKeyEx( const HKEY hKeyParent, const char *const pcKey, const REGSAM rsAccessRights, HKEY *hKey, const bool bReadX64= false );
 
   static bool GetCrystalHDLibraryPath(CStdString &strPath);
-  
+
+  static bool GetFocussedProcess(CStdString &strProcessFile);
+  static void CropSource(CRect& src, CRect& dst, CRect target);
+
+  static bool IsUsbDevice(const CStdStringW &strWdrive);
+
 private:
 #if _MSC_VER > 1400
   static DEVINST GetDrivesDevInstByDiskNumber(long DiskNumber);

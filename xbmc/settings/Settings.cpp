@@ -32,8 +32,6 @@
 #include "PasswordManager.h"
 #include "utils/RegExp.h"
 #include "GUIPassword.h"
-#include "guilib/GUIAudioManager.h"
-#include "guilib/AudioContext.h"
 #include "GUIInfoManager.h"
 #include "filesystem/MultiPathDirectory.h"
 #include "filesystem/SpecialProtocol.h"
@@ -57,7 +55,7 @@
 #include "utils/URIUtils.h"
 #include "input/MouseStat.h"
 #include "filesystem/File.h"
-#include "addons/AddonManager.h"
+#include "filesystem/DirectoryCache.h"
 
 using namespace std;
 using namespace XFILE;
@@ -93,17 +91,16 @@ void CSettings::Initialize()
   m_bStartVideoWindowed = false;
   m_bAddonAutoUpdate = true;
   m_bAddonNotifications = true;
+  m_bAddonForeignFilter = false;
 
-  m_nVolumeLevel = 0;
-  m_dynamicRangeCompressionLevel = 0;
-  m_iPreMuteVolumeLevel = 0;
+  m_fVolumeLevel = 1.0f;
   m_bMute = false;
   m_fZoomAmount = 1.0f;
   m_fPixelRatio = 1.0f;
   m_bNonLinStretch = false;
 
   m_pictureExtensions = ".png|.jpg|.jpeg|.bmp|.gif|.ico|.tif|.tiff|.tga|.pcx|.cbz|.zip|.cbr|.rar|.m3u|.dng|.nef|.cr2|.crw|.orf|.arw|.erf|.3fr|.dcr|.x3f|.mef|.raf|.mrw|.pef|.sr2|.rss";
-  m_musicExtensions = ".nsv|.m4a|.flac|.aac|.strm|.pls|.rm|.rma|.mpa|.wav|.wma|.ogg|.mp3|.mp2|.m3u|.mod|.amf|.669|.dmf|.dsm|.far|.gdm|.imf|.it|.m15|.med|.okt|.s3m|.stm|.sfx|.ult|.uni|.xm|.sid|.ac3|.dts|.cue|.aif|.aiff|.wpl|.ape|.mac|.mpc|.mp+|.mpp|.shn|.zip|.rar|.wv|.nsf|.spc|.gym|.adx|.dsp|.adp|.ymf|.ast|.afc|.hps|.xsp|.xwav|.waa|.wvs|.wam|.gcm|.idsp|.mpdsp|.mss|.spt|.rsd|.mid|.kar|.sap|.cmc|.cmr|.dmc|.mpt|.mpd|.rmt|.tmc|.tm8|.tm2|.oga|.url|.pxml|.tta|.rss|.cm3|.cms|.dlt|.brstm|.wtv";
+  m_musicExtensions = ".nsv|.m4a|.flac|.aac|.strm|.pls|.rm|.rma|.mpa|.wav|.wma|.ogg|.mp3|.mp2|.m3u|.mod|.amf|.669|.dmf|.dsm|.far|.gdm|.imf|.it|.m15|.med|.okt|.s3m|.stm|.sfx|.ult|.uni|.xm|.sid|.ac3|.dts|.cue|.aif|.aiff|.wpl|.ape|.mac|.mpc|.mp+|.mpp|.shn|.zip|.rar|.wv|.nsf|.spc|.gym|.adx|.dsp|.adp|.ymf|.ast|.afc|.hps|.xsp|.xwav|.waa|.wvs|.wam|.gcm|.idsp|.mpdsp|.mss|.spt|.rsd|.mid|.kar|.sap|.cmc|.cmr|.dmc|.mpt|.mpd|.rmt|.tmc|.tm8|.tm2|.oga|.url|.pxml|.tta|.rss|.cm3|.cms|.dlt|.brstm|.wtv|.mka";
   m_videoExtensions = ".m4v|.3g2|.3gp|.nsv|.tp|.ts|.ty|.strm|.pls|.rm|.rmvb|.m3u|.ifo|.mov|.qt|.divx|.xvid|.bivx|.vob|.nrg|.img|.iso|.pva|.wmv|.asf|.asx|.ogm|.m2v|.avi|.bin|.dat|.mpg|.mpeg|.mp4|.mkv|.avc|.vp3|.svq3|.nuv|.viv|.dv|.fli|.flv|.rar|.001|.wpl|.zip|.vdr|.dvr-ms|.xsp|.mts|.m2t|.m2ts|.evo|.ogv|.sdp|.avs|.rec|.url|.pxml|.vc1|.h264|.rcv|.rss|.mpls|.webm|.bdmv|.wtv";
   m_discStubExtensions = ".disc";
   // internal music extensions
@@ -137,8 +134,7 @@ void CSettings::Initialize()
   m_usingLoginScreen = false;
   m_lastUsedProfile = 0;
   m_currentProfile = 0;
-
-  m_activeKeyboardMapping = "default";
+  m_nextIdProfile = 0;
 }
 
 CSettings::~CSettings(void)
@@ -281,10 +277,7 @@ bool CSettings::GetSource(const CStdString &category, const TiXmlNode *source, C
   {
     if (pPathName->FirstChild())
     {
-      int pathVersion = 0;
-      pPathName->Attribute("pathversion", &pathVersion);
       CStdString strPath = pPathName->FirstChild()->Value();
-      strPath = CSpecialProtocol::ReplaceOldPath(strPath, pathVersion);
       // make sure there are no virtualpaths or stack paths defined in xboxmediacenter.xml
       //CLog::Log(LOGDEBUG,"    Found path: %s", strPath.c_str());
       if (!URIUtils::IsStack(strPath))
@@ -582,7 +575,7 @@ bool CSettings::SaveCalibration(TiXmlNode* pRootNode) const
 bool CSettings::LoadSettings(const CStdString& strSettingsFile)
 {
   // load the xml file
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
 
   if (!xmlDoc.LoadFile(strSettingsFile))
   {
@@ -671,16 +664,37 @@ bool CSettings::LoadSettings(const CStdString& strSettingsFile)
     GetInteger(pElement, "httpapibroadcastport", m_HttpApiBroadcastPort, 8278, 1, 65535);
     XMLUtils::GetBoolean(pElement, "addonautoupdate", m_bAddonAutoUpdate);
     XMLUtils::GetBoolean(pElement, "addonnotifications", m_bAddonNotifications);
+    XMLUtils::GetBoolean(pElement, "addonforeignfilter", m_bAddonForeignFilter);
   }
 
   pElement = pRootElement->FirstChildElement("defaultvideosettings");
   if (pElement)
   {
+    int deinterlaceMode;
+    bool deinterlaceModePresent = GetInteger(pElement, "deinterlacemode", deinterlaceMode, VS_DEINTERLACEMODE_OFF, VS_DEINTERLACEMODE_OFF, VS_DEINTERLACEMODE_FORCE);
     int interlaceMethod;
-    GetInteger(pElement, "interlacemethod", interlaceMethod, VS_INTERLACEMETHOD_NONE, VS_INTERLACEMETHOD_NONE, VS_INTERLACEMETHOD_INVERSE_TELECINE);
+    bool interlaceMethodPresent = GetInteger(pElement, "interlacemethod", interlaceMethod, VS_INTERLACEMETHOD_AUTO, VS_INTERLACEMETHOD_AUTO, VS_INTERLACEMETHOD_MAX);
+    // For smooth conversion of settings stored before the deinterlaceMode existed
+    if (!deinterlaceModePresent && interlaceMethodPresent)
+    {
+      if (interlaceMethod == VS_INTERLACEMETHOD_NONE)
+      {
+        deinterlaceMode = VS_DEINTERLACEMODE_OFF;
+        interlaceMethod = VS_INTERLACEMETHOD_AUTO;
+      }
+      else if (interlaceMethod == VS_INTERLACEMETHOD_AUTO)
+      {
+        deinterlaceMode = VS_DEINTERLACEMODE_AUTO;
+      }
+      else
+      {
+        deinterlaceMode = VS_DEINTERLACEMODE_FORCE;
+      }
+    }
+    m_defaultVideoSettings.m_DeinterlaceMode = (EDEINTERLACEMODE)deinterlaceMode;
     m_defaultVideoSettings.m_InterlaceMethod = (EINTERLACEMETHOD)interlaceMethod;
     int scalingMethod;
-    GetInteger(pElement, "scalingmethod", scalingMethod, VS_SCALINGMETHOD_LINEAR, VS_SCALINGMETHOD_NEAREST, VS_SCALINGMETHOD_AUTO);
+    GetInteger(pElement, "scalingmethod", scalingMethod, VS_SCALINGMETHOD_LINEAR, VS_SCALINGMETHOD_NEAREST, VS_SCALINGMETHOD_MAX);
     m_defaultVideoSettings.m_ScalingMethod = (ESCALINGMETHOD)scalingMethod;
 
     GetInteger(pElement, "viewmode", m_defaultVideoSettings.m_ViewMode, VIEW_MODE_NORMAL, VIEW_MODE_NORMAL, VIEW_MODE_CUSTOM);
@@ -707,8 +721,8 @@ bool CSettings::LoadSettings(const CStdString& strSettingsFile)
   pElement = pRootElement->FirstChildElement("audio");
   if (pElement)
   {
-    GetInteger(pElement, "volumelevel", m_nVolumeLevel, VOLUME_MAXIMUM, VOLUME_MINIMUM, VOLUME_MAXIMUM);
-    GetInteger(pElement, "dynamicrangecompression", m_dynamicRangeCompressionLevel, VOLUME_DRC_MINIMUM, VOLUME_DRC_MINIMUM, VOLUME_DRC_MAXIMUM);
+    XMLUtils::GetBoolean(pElement, "mute", m_bMute);
+    GetFloat(pElement, "fvolumelevel", m_fVolumeLevel, VOLUME_MAXIMUM, VOLUME_MINIMUM, VOLUME_MAXIMUM);
   }
 
   LoadCalibration(pRootElement, strSettingsFile);
@@ -735,9 +749,14 @@ bool CSettings::LoadSettings(const CStdString& strSettingsFile)
   if (g_guiSettings.GetBool("debug.showloginfo"))
   {
     g_advancedSettings.m_logLevel = std::max(g_advancedSettings.m_logLevelHint, LOG_LEVEL_DEBUG_FREEMEM);
-    CLog::SetLogLevel(g_advancedSettings.m_logLevel);
     CLog::Log(LOGNOTICE, "Enabled debug logging due to GUI setting (%d)", g_advancedSettings.m_logLevel);
   }
+  else
+  {
+    g_advancedSettings.m_logLevel = std::min(g_advancedSettings.m_logLevelHint, LOG_LEVEL_DEBUG/*LOG_LEVEL_NORMAL*/);
+    CLog::Log(LOGNOTICE, "Disabled debug logging due to GUI setting. Level %d.", g_advancedSettings.m_logLevel);
+  }  
+  CLog::SetLogLevel(g_advancedSettings.m_logLevel);
   return true;
 }
 
@@ -750,7 +769,7 @@ bool CSettings::LoadPlayerCoreFactorySettings(const CStdString& fileStr, bool cl
     return false;
   }
 
-  TiXmlDocument playerCoreFactoryXML;
+  CXBMCTinyXML playerCoreFactoryXML;
   if (!playerCoreFactoryXML.LoadFile(fileStr))
   {
     CLog::Log(LOGERROR, "Error loading %s, Line %d (%s)", fileStr.c_str(), playerCoreFactoryXML.ErrorRow(), playerCoreFactoryXML.ErrorDesc());
@@ -762,7 +781,7 @@ bool CSettings::LoadPlayerCoreFactorySettings(const CStdString& fileStr, bool cl
 
 bool CSettings::SaveSettings(const CStdString& strSettingsFile, CGUISettings *localSettings /* = NULL */) const
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   TiXmlElement xmlRootElement("settings");
   TiXmlNode *pRoot = xmlDoc.InsertEndChild(xmlRootElement);
   if (!pRoot) return false;
@@ -847,11 +866,13 @@ bool CSettings::SaveSettings(const CStdString& strSettingsFile, CGUISettings *lo
   XMLUtils::SetInt(pNode, "httpapibroadcastlevel", m_HttpApiBroadcastLevel);
   XMLUtils::SetBoolean(pNode, "addonautoupdate", m_bAddonAutoUpdate);
   XMLUtils::SetBoolean(pNode, "addonnotifications", m_bAddonNotifications);
+  XMLUtils::SetBoolean(pNode, "addonforeignfilter", m_bAddonForeignFilter);
 
   // default video settings
   TiXmlElement videoSettingsNode("defaultvideosettings");
   pNode = pRoot->InsertEndChild(videoSettingsNode);
   if (!pNode) return false;
+  XMLUtils::SetInt(pNode, "deinterlacemode", m_defaultVideoSettings.m_DeinterlaceMode);
   XMLUtils::SetInt(pNode, "interlacemethod", m_defaultVideoSettings.m_InterlaceMethod);
   XMLUtils::SetInt(pNode, "scalingmethod", m_defaultVideoSettings.m_ScalingMethod);
   XMLUtils::SetFloat(pNode, "noisereduction", m_defaultVideoSettings.m_NoiseReduction);
@@ -877,8 +898,8 @@ bool CSettings::SaveSettings(const CStdString& strSettingsFile, CGUISettings *lo
   TiXmlElement volumeNode("audio");
   pNode = pRoot->InsertEndChild(volumeNode);
   if (!pNode) return false;
-  XMLUtils::SetInt(pNode, "volumelevel", m_nVolumeLevel);
-  XMLUtils::SetInt(pNode, "dynamicrangecompression", m_dynamicRangeCompressionLevel);
+  XMLUtils::SetBoolean(pNode, "mute", m_bMute);
+  XMLUtils::SetFloat(pNode, "fvolumelevel", m_fVolumeLevel);
 
   SaveCalibration(pRoot);
 
@@ -920,11 +941,8 @@ bool CSettings::LoadProfile(unsigned int index)
     CLog::Log(LOGINFO, "load language info file:%s", strLangInfoPath.c_str());
     g_langInfo.Load(strLangInfoPath);
 
-    CStdString strLanguagePath;
-    strLanguagePath.Format("special://xbmc/language/%s/strings.xml", strLanguage.c_str());
-
-    CButtonTranslator::GetInstance().Load();
-    g_localizeStrings.Load(strLanguagePath);
+    CButtonTranslator::GetInstance().Load(true);
+    g_localizeStrings.Load("special://xbmc/language/", strLanguage);
 
     g_Mouse.SetEnabled(g_guiSettings.GetBool("input.enablemouse"));
 
@@ -936,7 +954,7 @@ bool CSettings::LoadProfile(unsigned int index)
 
     if (m_currentProfile != 0)
     {
-      TiXmlDocument doc;
+      CXBMCTinyXML doc;
       if (doc.LoadFile(URIUtils::AddFileToFolder(GetUserDataFolder(),"guisettings.xml")))
         g_guiSettings.LoadMasterLock(doc.RootElement());
     }
@@ -951,10 +969,8 @@ bool CSettings::LoadProfile(unsigned int index)
     CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_WINDOW_RESET);
     g_windowManager.SendMessage(msg);
 
-    CUtil::DeleteMusicDatabaseDirectoryCache();
-    CUtil::DeleteVideoDatabaseDirectoryCache();
-
-    ADDON::CAddonMgr::Get().StartServices(false);
+    CUtil::DeleteDirectoryCache();
+    g_directoryCache.Clear();
 
     return true;
   }
@@ -994,7 +1010,7 @@ bool CSettings::DeleteProfile(unsigned int index)
       }
 
       CFileItemPtr item = CFileItemPtr(new CFileItem(URIUtils::AddFileToFolder(GetUserDataFolder(), strDirectory)));
-      item->m_strPath = URIUtils::AddFileToFolder(GetUserDataFolder(), strDirectory + "\\");
+      item->SetPath(URIUtils::AddFileToFolder(GetUserDataFolder(), strDirectory + "/"));
       item->m_bIsFolder = true;
       item->Select(true);
       CFileUtils::DeleteItem(item);
@@ -1013,7 +1029,7 @@ void CSettings::LoadProfiles(const CStdString& profilesFile)
   // clear out our profiles
   m_vecProfiles.clear();
 
-  TiXmlDocument profilesDoc;
+  CXBMCTinyXML profilesDoc;
   if (CFile::Exists(profilesFile))
   {
     if (profilesDoc.LoadFile(profilesFile))
@@ -1023,6 +1039,7 @@ void CSettings::LoadProfiles(const CStdString& profilesFile)
       {
         XMLUtils::GetUInt(rootElement, "lastloaded", m_lastUsedProfile);
         XMLUtils::GetBoolean(rootElement, "useloginscreen", m_usingLoginScreen);
+        XMLUtils::GetInt(rootElement, "nextIdProfile", m_nextIdProfile);
 
         TiXmlElement* pProfile = rootElement->FirstChildElement("profile");
         
@@ -1032,8 +1049,8 @@ void CSettings::LoadProfiles(const CStdString& profilesFile)
         while (pProfile)
         {
           CProfile profile(defaultDir);
-          profile.Load(pProfile);
-          m_vecProfiles.push_back(profile);
+          profile.Load(pProfile,GetNextProfileId());
+          AddProfile(profile);
           pProfile = pProfile->NextSiblingElement("profile");
         }
       }
@@ -1046,8 +1063,8 @@ void CSettings::LoadProfiles(const CStdString& profilesFile)
 
   if (m_vecProfiles.empty())
   { // add the master user
-    CProfile profile("special://masterprofile/", "Master user");
-    m_vecProfiles.push_back(profile);
+    CProfile profile("special://masterprofile/", "Master user",0);
+    AddProfile(profile);
   }
 
   // check the validity of the previous profile index
@@ -1064,12 +1081,13 @@ void CSettings::LoadProfiles(const CStdString& profilesFile)
 
 bool CSettings::SaveProfiles(const CStdString& profilesFile) const
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   TiXmlElement xmlRootElement("profiles");
   TiXmlNode *pRoot = xmlDoc.InsertEndChild(xmlRootElement);
   if (!pRoot) return false;
   XMLUtils::SetInt(pRoot,"lastloaded", m_currentProfile);
   XMLUtils::SetBoolean(pRoot,"useloginscreen",m_usingLoginScreen);
+  XMLUtils::SetInt(pRoot,"nextIdProfile",m_nextIdProfile);      
   for (unsigned int i = 0; i < m_vecProfiles.size(); ++i)
     m_vecProfiles[i].Save(pRoot);
 
@@ -1079,7 +1097,7 @@ bool CSettings::SaveProfiles(const CStdString& profilesFile) const
 
 bool CSettings::LoadUPnPXml(const CStdString& strSettingsFile)
 {
-  TiXmlDocument UPnPDoc;
+  CXBMCTinyXML UPnPDoc;
 
   if (!CFile::Exists(strSettingsFile))
   { // set defaults, or assume no rss feeds??
@@ -1115,7 +1133,7 @@ bool CSettings::LoadUPnPXml(const CStdString& strSettingsFile)
 
 bool CSettings::SaveUPnPXml(const CStdString& strSettingsFile) const
 {
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   TiXmlElement xmlRootElement("upnpserver");
   TiXmlNode *pRoot = xmlDoc.InsertEndChild(xmlRootElement);
   if (!pRoot) return false;
@@ -1255,7 +1273,7 @@ bool CSettings::AddShare(const CStdString &type, const CMediaSource &share)
 bool CSettings::SaveSources()
 {
   // TODO: Should we be specifying utf8 here??
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
   TiXmlElement xmlRootElement("sources");
   TiXmlNode *pRoot = doc.InsertEndChild(xmlRootElement);
   if (!pRoot) return false;
@@ -1317,7 +1335,7 @@ void CSettings::LoadSources()
   CLog::Log(LOGNOTICE, "Loading media sources from %s", strSourcesFile.c_str());
 
   // load xml file
-  TiXmlDocument xmlDoc;
+  CXBMCTinyXML xmlDoc;
   TiXmlElement *pRootElement = NULL;
   if (xmlDoc.LoadFile(strSourcesFile))
   {
@@ -1744,7 +1762,7 @@ void CSettings::LoadRSSFeeds()
 {
   CStdString rssXML;
   rssXML = GetUserDataItem("RssFeeds.xml");
-  TiXmlDocument rssDoc;
+  CXBMCTinyXML rssDoc;
   if (!CFile::Exists(rssXML))
   { // set defaults, or assume no rss feeds??
     return;
@@ -1857,6 +1875,11 @@ const CProfile &CSettings::GetCurrentProfile() const
   return emptyProfile;
 }
 
+ int CSettings::GetCurrentProfileId() const
+ {
+   return GetCurrentProfile().getId();
+ }
+
 void CSettings::UpdateCurrentProfileDate()
 {
   if (m_currentProfile < m_vecProfiles.size())
@@ -1892,6 +1915,9 @@ int CSettings::GetProfileIndex(const CStdString &name) const
 
 void CSettings::AddProfile(const CProfile &profile)
 {
+  //data integrity check - covers off migration from old profiles.xml, incrementing of the m_nextIdProfile,and bad data coming in
+  m_nextIdProfile = max(m_nextIdProfile, profile.getId() + 1); 
+
   m_vecProfiles.push_back(profile);
 }
 

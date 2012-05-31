@@ -1,3 +1,5 @@
+#pragma once
+
 /*
  *      Copyright (C) 2005-2008 Team XBMC
  *      http://www.xbmc.org
@@ -19,14 +21,16 @@
  *
  */
 
-#if !defined(__arm__)
-#ifndef WINDOW_SYSTEM_OSX_H
-#define WINDOW_SYSTEM_OSX_H
+#if defined(TARGET_DARWIN_OSX)
 
 #include "windowing/WinSystem.h"
-#include <SDL/SDL_video.h>
+#include "threads/CriticalSection.h"
 
+typedef struct SDL_Surface SDL_Surface;
+
+class IDispResource;
 class CWinEventsOSX;
+
 class CWinSystemOSX : public CWinSystemBase
 {
 public:
@@ -47,27 +51,41 @@ public:
   virtual bool Restore();
   virtual bool Hide();
   virtual bool Show(bool raise = true);
+  virtual void OnMove(int x, int y);
 
   virtual void EnableSystemScreenSaver(bool bEnable);
   virtual bool IsSystemScreenSaverEnabled();
+  virtual void ResetOSScreensaver();
+
+  virtual void Register(IDispResource *resource);
+  virtual void Unregister(IDispResource *resource);
   
   virtual int GetNumScreens();
 
+  void CheckDisplayChanging(u_int32_t flags);
+  
+  void* GetCGLContextObj();
 
 protected:
   void* CreateWindowedContext(void* shareCtx);
   void* CreateFullScreenContext(int screen_index, void* shareCtx);
-  void  GetScreenResolution(int* w, int* h, double* fps);
-  void  EnableVSync(bool enable);
-  bool  SwitchToVideoMode(int width, int height, double refreshrate);
-  void  GetVideoModes(void);
+  void  GetScreenResolution(int* w, int* h, double* fps, int screenIdx);
+  void  EnableVSync(bool enable); 
+  bool  SwitchToVideoMode(int width, int height, double refreshrate, int screenIdx);
+  void  FillInVideoModes();
   bool  FlushBuffer(void);
 
   void* m_glContext;
   static void* m_lastOwnedContext;
   SDL_Surface* m_SDLSurface;
   CWinEventsOSX *m_osx_events;
+  bool                         m_use_system_screensaver;
+  bool                         m_can_display_switch;
+  void                        *m_windowDidMove;
+  void                        *m_windowDidReSize;
+
+  CCriticalSection             m_resourceSection;
+  std::vector<IDispResource*>  m_resources;
 };
 
-#endif // WINDOW_SYSTEM_H
 #endif

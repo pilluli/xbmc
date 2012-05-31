@@ -6,16 +6,15 @@ INCLUDES=-I$(abs_top_srcdir) \
 
 .SUFFIXES : .m .mm
 
-# do not include eprintf.cpp as make links to libgcc.a where as xcode does not.
 SRCS = \
 	SDLMain.mm \
 	XBMCHelper.m \
 	AutoPool.mm \
 	DarwinUtils.mm \
 	CocoaInterface.mm \
+	HotKeyController.m \
 	CoreAudio.cpp \
 	OSXGNUReplacements.c \
-	posix-realtime-stub.c
 	
 LIB=osx.a
 

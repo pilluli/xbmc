@@ -20,10 +20,9 @@
  */
 
 #include "Repository.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "filesystem/File.h"
 #include "AddonDatabase.h"
-#include "Application.h"
 #include "settings/Settings.h"
 #include "FileItem.h"
 #include "utils/JobManager.h"
@@ -31,6 +30,8 @@
 #include "utils/log.h"
 #include "utils/URIUtils.h"
 #include "dialogs/GUIDialogYesNo.h"
+#include "dialogs/GUIDialogKaiToast.h"
+#include "TextureDatabase.h"
 
 using namespace XFILE;
 using namespace ADDON;
@@ -130,7 +131,7 @@ VECADDONS CRepository::Parse()
   CSingleLock lock(m_critSection);
 
   VECADDONS result;
-  TiXmlDocument doc;
+  CXBMCTinyXML doc;
 
   CStdString file = m_info;
   if (m_compressed)
@@ -193,14 +194,27 @@ bool CRepositoryUpdateJob::DoWork()
   // check for updates
   CAddonDatabase database;
   database.Open();
+  
+  CTextureDatabase textureDB;
+  textureDB.Open();
   for (unsigned int i=0;i<addons.size();++i)
   {
+    // manager told us to feck off
+    if (ShouldCancel(0,0))
+      break;
     if (!CAddonInstaller::Get().CheckDependencies(addons[i]))
       addons[i]->Props().broken = g_localizeStrings.Get(24044);
 
+    // invalidate the art associated with this item
+    if (!addons[i]->Props().fanart.empty())
+      textureDB.InvalidateCachedTexture(addons[i]->Props().fanart);
+    if (!addons[i]->Props().icon.empty())
+      textureDB.InvalidateCachedTexture(addons[i]->Props().icon);
+
     AddonPtr addon;
     CAddonMgr::Get().GetAddon(addons[i]->ID(),addon);
-    if (addon && addons[i]->Version() > addon->Version())
+    if (addon && addons[i]->Version() > addon->Version() &&
+        !database.IsAddonBlacklisted(addons[i]->ID(),addons[i]->Version().c_str()))
     {
       if (g_settings.m_bAddonAutoUpdate || addon->Type() >= ADDON_VIZ_LIBRARY)
       {
@@ -212,9 +226,9 @@ bool CRepositoryUpdateJob::DoWork()
       }
       else if (g_settings.m_bAddonNotifications)
       {
-        g_application.m_guiDialogKaiToast.QueueNotification(addon->Icon(),
-                                                            g_localizeStrings.Get(24061),
-                                                            addon->Name(),TOAST_DISPLAY_TIME,false,TOAST_DISPLAY_TIME);
+        CGUIDialogKaiToast::QueueNotification(addon->Icon(),
+                                              g_localizeStrings.Get(24061),
+                                              addon->Name(),TOAST_DISPLAY_TIME,false,TOAST_DISPLAY_TIME);
       }
     }
     if (!addons[i]->Props().broken.IsEmpty())
@@ -251,10 +265,8 @@ VECADDONS CRepositoryUpdateJob::GrabAddons(RepositoryPtr& repo)
       CLog::Log(LOGERROR,"Repository %s returned no add-ons, listing may have failed",repo->Name().c_str());
   }
   else
-  {
     database.GetRepository(repo->ID(),addons);
-    database.SetRepoTimestamp(repo->ID(),CDateTime::GetCurrentDateTime().GetAsDBDateTime());
-  }
+  database.SetRepoTimestamp(repo->ID(),CDateTime::GetCurrentDateTime().GetAsDBDateTime());
 
   return addons;
 }

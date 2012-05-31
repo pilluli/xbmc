@@ -1,6 +1,6 @@
 #pragma once
 /*
- *      Copyright (C) 2005-2010 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -22,64 +22,14 @@
 
 #include <string.h>
 #include <stdlib.h>
-#include "utils/StdString.h"
+
+#include "JSONRPCUtils.h"
 #include "interfaces/IAnnouncer.h"
-#include "interfaces/AnnouncementUtils.h"
-#include "ITransportLayer.h"
-#include "utils/Variant.h"
 #include "utils/JSONVariantWriter.h"
 #include "utils/JSONVariantParser.h"
 
-
 namespace JSONRPC
 {
-  /*!
-   \ingroup jsonrpc
-   \brief Possible statuc codes of a response
-   to a JSON RPC request
-   */
-  enum JSON_STATUS
-  {
-    OK = 0,
-    ACK = -1,
-    InvalidRequest = -32600,
-    MethodNotFound = -32601,
-    InvalidParams = -32602,
-    InternalError = -32603,
-    ParseError = -32700,
-    //-32099..-32000 Reserved for implementation-defined server-errors.
-    BadPermission = -32099,
-    FailedToExecute = -32100
-  };
-
-  /*!
-   \brief Function pointer for json rpc methods
-   */
-  typedef JSON_STATUS (*MethodCall) (const CStdString &method, ITransportLayer *transport, IClient *client, const CVariant& parameterObject, CVariant &result);
-
-  /*!
-   \ingroup jsonrpc
-   \brief Permission categories for json rpc methods
-   
-   A json rpc method will only be called if the caller 
-   has the correct permissions to exectue the method.
-   The method call needs to be perfectly threadsafe.
-  */
-  enum OperationPermission
-  {
-    ReadData = 0x1,
-    ControlPlayback = 0x2,
-    ControlNotify = 0x4,
-    ControlPower = 0x8,
-    Logging = 0x10,
-    ScanLibrary = 0x20,
-    Navigate = 0x40
-  };
-
-  static const int OPERATION_PERMISSION_ALL = (ReadData | ControlPlayback | ControlNotify | ControlPower | Logging | ScanLibrary | Navigate);
-
-  static const int OPERATION_PERMISSION_NOTIFICATION = (ControlPlayback | ControlNotify | ControlPower | Logging | ScanLibrary | Navigate);
-
   /*!
    \brief Possible value types of a parameter or return type
    */
@@ -101,6 +51,24 @@ namespace JSONRPC
    json rpc method calls.*/
   class CJSONUtils
   {
+  public:
+    static void MillisecondsToTimeObject(int time, CVariant &result)
+    {
+      int ms = time % 1000;
+      result["milliseconds"] = ms;
+      time = (time - ms) / 1000;
+
+      int s = time % 60;
+      result["seconds"] = s;
+      time = (time - s) / 60;
+
+      int m = time % 60;
+      result["minutes"] = m;
+      time = (time -m) / 60;
+
+      result["hours"] = time;
+    }
+
   protected:
     /*!
      \brief Checks if the given object contains a parameter
@@ -175,59 +143,6 @@ namespace JSONRPC
     }
 
     /*!
-     \brief Returns a string representation for the 
-     given OperationPermission
-     \param permission Specific OperationPermission
-     \return String representation of the given OperationPermission
-     */
-    static inline const char *PermissionToString(const OperationPermission &permission)
-    {
-      switch (permission)
-      {
-      case ReadData:
-        return "ReadData";
-      case ControlPlayback:
-        return "ControlPlayback";
-      case ControlNotify:
-        return "ControlNotify";
-      case ControlPower:
-        return "ControlPower";
-      case Logging:
-        return "Logging";
-      case ScanLibrary:
-        return "ScanLibrary";
-      case Navigate:
-        return "Navigate";
-      default:
-        return "Unknown";
-      }
-    }
-
-    /*!
-     \brief Returns a OperationPermission value for the given
-     string representation
-     \param permission String representation of the OperationPermission
-     \return OperationPermission value of the given string representation
-     */
-    static inline OperationPermission StringToPermission(std::string permission)
-    {
-      if (permission.compare("ControlPlayback") == 0)
-        return ControlPlayback;
-      if (permission.compare("ControlNotify") == 0)
-        return ControlNotify;
-      if (permission.compare("ControlPower") == 0)
-        return ControlPower;
-      if (permission.compare("Logging") == 0)
-        return Logging;
-      if (permission.compare("ScanLibrary") == 0)
-        return ScanLibrary;
-      if (permission.compare("Navigate") == 0)
-        return Navigate;
-
-      return ReadData;
-    }
-
-    /*!
      \brief Returns a TransportLayerCapability value of the
      given string representation
      \param transport String representation of the TransportLayerCapability
@@ -237,8 +152,10 @@ namespace JSONRPC
     {
       if (transport.compare("Announcing") == 0)
         return Announcing;
-      if (transport.compare("FileDownload") == 0)
-        return FileDownload;
+      if (transport.compare("FileDownloadDirect") == 0)
+        return FileDownloadDirect;
+      if (transport.compare("FileDownloadRedirect") == 0)
+        return FileDownloadRedirect;
 
       return Response;
     }
@@ -452,25 +369,28 @@ namespace JSONRPC
           value = CVariant(CVariant::VariantTypeObject);
           break;
         default:
-          value = CVariant(CVariant::VariantTypeConstNull);
+          value = CVariant(CVariant::VariantTypeNull);
       }
     }
 
     static inline bool HasType(JSONSchemaType typeObject, JSONSchemaType type) { return (typeObject & type) == type; }
 
-    static std::string AnnouncementToJSON(ANNOUNCEMENT::EAnnouncementFlag flag, const char *sender, const char *method, const CVariant &data, bool compactOutput)
+    static inline bool ParameterNotNull(const CVariant &parameterObject, std::string key) { return parameterObject.isMember(key) && !parameterObject[key].isNull(); }
+
+    /*!
+     \brief Copies the values from the jsonStringArray to the stringArray.
+     stringArray is cleared.
+     \param jsonStringArray JSON object representing a string array
+     \param stringArray String array where the values are copied into (cleared)
+     */
+    static void CopyStringArray(const CVariant &jsonStringArray, std::vector<std::string> &stringArray)
     {
-      CVariant root;
-      root["jsonrpc"] = "2.0";
+      if (!jsonStringArray.isArray())
+        return;
 
-      CStdString namespaceMethod;
-      namespaceMethod.Format("%s.%s", ANNOUNCEMENT::CAnnouncementUtils::AnnouncementFlagToString(flag), method);
-      root["method"]  = namespaceMethod.c_str();
-
-      root["params"]["data"] = data;
-      root["params"]["sender"] = sender;
-
-      return CJSONVariantWriter::Write(root, compactOutput);
+      stringArray.clear();
+      for (CVariant::const_iterator_array it = jsonStringArray.begin_array(); it != jsonStringArray.end_array(); it++)
+        stringArray.push_back(it->asString());
     }
   };
 }

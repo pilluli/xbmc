@@ -73,9 +73,9 @@ void CGUIImage::UpdateInfo(const CGUIListItem *item)
     return;
 
   if (item)
-    SetFileName(m_info.GetItemLabel(item, true));
+    SetFileName(m_info.GetItemLabel(item, true, &m_currentFallback));
   else
-    SetFileName(m_info.GetLabel(m_parentID, true));
+    SetFileName(m_info.GetLabel(m_parentID, true, &m_currentFallback));
 }
 
 void CGUIImage::AllocateOnDemand()
@@ -97,12 +97,18 @@ void CGUIImage::Process(unsigned int currentTime, CDirtyRegionList &dirtyregions
 {
   // check whether our image failed to allocate, and if so drop back to the fallback image
   if (m_texture.FailedToAlloc() && !m_texture.GetFileName().Equals(m_info.GetFallback()))
-    m_texture.SetFileName(m_info.GetFallback());
+  {
+    if (!m_currentFallback.IsEmpty() && !m_texture.GetFileName().Equals(m_currentFallback))
+      m_texture.SetFileName(m_currentFallback);
+    else
+      m_texture.SetFileName(m_info.GetFallback());
+  }
 
   if (m_crossFadeTime)
   {
     // make sure our texture has started allocating
-    m_texture.AllocResources();
+    if (m_texture.AllocResources())
+      MarkDirtyRegion();
 
     // compute the frame time
     unsigned int frameTime = 0;
@@ -177,6 +183,7 @@ bool CGUIImage::ProcessFading(CGUIImage::CFadingTexture *texture, unsigned int f
   assert(texture);
   if (texture->m_fadeTime <= frameTime)
   { // time to kill off the texture
+    MarkDirtyRegion();
     delete texture;
     return false;
   }
@@ -274,14 +281,8 @@ CRect CGUIImage::CalcRenderRegion() const
 {
   CRect region = m_texture.GetRenderRect();
 
-  if (m_fadingTextures.size())  // have some fading images
-  {
-    for (vector<CFadingTexture *>::const_iterator itr = m_fadingTextures.begin(); itr != m_fadingTextures.end();)
-    {
-      region.Union( (*itr)->m_texture->GetRenderRect() );
-      itr++;
-    }
-  }
+  for (vector<CFadingTexture *>::const_iterator itr = m_fadingTextures.begin(); itr != m_fadingTextures.end(); itr++)
+    region.Union( (*itr)->m_texture->GetRenderRect() );
 
   return CGUIControl::CalcRenderRegion().Intersect(region);
 }
@@ -306,7 +307,7 @@ void CGUIImage::SetCrossFade(unsigned int time)
 void CGUIImage::SetFileName(const CStdString& strFileName, bool setConstant)
 {
   if (setConstant)
-    m_info.SetLabel(strFileName, "");
+    m_info.SetLabel(strFileName, "", GetParentID());
 
   if (m_crossFadeTime)
   {

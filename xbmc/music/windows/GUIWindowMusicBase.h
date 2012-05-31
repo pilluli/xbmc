@@ -46,7 +46,7 @@ public:
   CGUIWindowMusicBase(int id, const CStdString &xmlFile);
   virtual ~CGUIWindowMusicBase(void);
   virtual bool OnMessage(CGUIMessage& message);
-  virtual bool OnAction(const CAction& action);
+  virtual bool OnBack(int actionID);
 
   void OnInfo(CFileItem *pItem, bool bShowInfo = false);
   static void SetupFanart(CFileItemList& items);
@@ -78,7 +78,7 @@ protected:
 
   void RetrieveMusicInfo();
   void OnInfo(int iItem, bool bShowInfo = true);
-  void OnInfoAll(int iItem, bool bCurrent=false);
+  void OnInfoAll(int iItem, bool bCurrent=false, bool refresh=false);
   virtual void OnQueueItem(int iItem);
   enum ALLOW_SELECTION { SELECTION_ALLOWED = 0, SELECTION_AUTO, SELECTION_FORCED };
   bool FindAlbumInfo(const CStdString& strAlbum, const CStdString& strArtist, MUSIC_GRABBER::CMusicAlbumInfo& album, ALLOW_SELECTION allowSelection);

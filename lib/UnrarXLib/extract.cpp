@@ -1,9 +1,15 @@
 #include "rar.hpp"
 #include "Util.h"
-#ifdef _LINUX
-#include "XSyncUtils.h"
-#include "XEventUtils.h"
-#endif
+
+// a cautious wrapper around strncpy
+char *strncpy_null_terminated(char *dest, const char *src, size_t n)
+{
+  char *result = strncpy(dest, src, n);
+  if(n>0) {
+    dest[n-1] = '\0';
+  }
+  return result;
+}
 
 CmdExtract::CmdExtract()
 {
@@ -90,7 +96,7 @@ void CmdExtract::ExtractArchiveInit(CommandData *Cmd,Archive &Arc)
 #endif
 
   if (*Cmd->Password!=0)
-    strcpy(Password,Cmd->Password);
+    strncpy_null_terminated(Password,Cmd->Password, MAXPASSWORD);
   PasswordAll=(*Cmd->Password!=0);
 
   DataIO.UnpVolume=false;
@@ -249,7 +255,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
   char ArcFileName[NM];
 
   IntToExt(Arc.NewLhd.FileName,Arc.NewLhd.FileName);
-  strcpy(ArcFileName,Arc.NewLhd.FileName);
+  strncpy_null_terminated(ArcFileName,Arc.NewLhd.FileName, NM);
 
   wchar ArcFileNameW[NM];
   *ArcFileNameW=0;
@@ -297,7 +303,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
     char Name[NM];
     WideToChar(ArcFileNameW,Name);
     if (IsNameUsable(Name))
-    strcpy(ArcFileName,Name);
+      strncpy_null_terminated(ArcFileName,Name, NM);
   }
 #endif
 
@@ -329,7 +335,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
   if ((Arc.NewLhd.Flags & (LHD_SPLIT_BEFORE/*|LHD_SOLID*/)) && FirstFile)
   {
     char CurVolName[NM];
-    strcpy(CurVolName,ArcName);
+    strncpy_null_terminated(CurVolName,ArcName, NM);
 
     VolNameToFirstName(ArcName,ArcName,(Arc.NewMhd.Flags & MHD_NEWNUMBERING) != 0);
     if (stricomp(ArcName,CurVolName)!=0 && FileExist(ArcName))
@@ -351,7 +357,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
       }
     }
 #endif
-    strcpy(ArcName,CurVolName);
+    strncpy_null_terminated(ArcName,CurVolName, NM);
   }
 #endif
 
@@ -393,7 +399,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
           if (Cmd->Callback==NULL ||
               Cmd->Callback(UCM_NEEDPASSWORD,Cmd->UserData,(LONG)Cmd->Password,sizeof(Cmd->Password))==-1)
             return(false);
-        strcpy(Password,Cmd->Password);
+        strncpy_null_terminated(Password,Cmd->Password, MAXPASSWORD);
 
 #else
         if (!GetPassword(PASSWORD_FILE,ArcFileName,Password,sizeof(Password)))
@@ -430,7 +436,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
       WideToChar(Cmd->ExtrPathW,DestFileName);
     else
 #endif
-      strcpy(DestFileName,Cmd->ExtrPath);
+      strncpy_null_terminated(DestFileName,Cmd->ExtrPath, NM);
 
 
 #ifndef SFX_MODULE
@@ -551,7 +557,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
 #ifdef RARDLL
     if (*Cmd->DllDestName)
     {
-      strncpy(DestFileName,Cmd->DllDestName,sizeof(DestFileName));
+      strncpy_null_terminated(DestFileName,Cmd->DllDestName,sizeof(DestFileName));
       *DestFileNameW=0;
       if (Cmd->DllOpMode!=RAR_EXTRACT)
         ExtrFile=false;
@@ -751,7 +757,7 @@ bool CmdExtract::ExtractCurrentFile(CommandData *Cmd,Archive &Arc,int HeaderSize
       }
 
       if (DataIO.UnpackToMemorySize > -1)
-        if (WaitForSingleObject(DataIO.hQuit,1) == WAIT_OBJECT_0)
+        if (DataIO.hQuit->WaitMSec(1))
         {
           return false;
         }
@@ -841,34 +847,31 @@ void CmdExtract::UnstoreFile(ComprDataIO &DataIO,Int64 DestUnpSize)
   {
     while (1)
     {
-      if (WaitForSingleObject(DataIO.hQuit,1) == WAIT_OBJECT_0)
+      if (DataIO.hQuit->WaitMSec(1))
       {
         return;
       }
       int Code=DataIO.UnpRead(&Buffer[0],Buffer.Size());
       if (DataIO.UnpackToMemorySize > -1 && !DataIO.NextVolumeMissing)
       {
-        if (WaitForSingleObject(DataIO.hSeek,1) == WAIT_OBJECT_0)
+        if (DataIO.hSeek->WaitMSec(1))
           continue;
       }
       if (Code > 0)
       {
-        Code=Code<DestUnpSize ? Code:int64to32(DestUnpSize);
         DataIO.UnpWrite(&Buffer[0],Code);
-        if (DestUnpSize>=0)
-          DestUnpSize-=Code;
       }
       else 
       {
         if (DataIO.NextVolumeMissing)
-          SetEvent(DataIO.hSeekDone);
+          DataIO.hSeekDone->Set();
         else 
-        if (WaitForSingleObject(DataIO.hSeek,1) == WAIT_OBJECT_0)
+          if (DataIO.hSeek->WaitMSec(1))
            continue;
-        ResetEvent(DataIO.hBufferFilled);
-        SetEvent(DataIO.hBufferEmpty);
-        while (WaitForSingleObject(DataIO.hBufferFilled,1) != WAIT_OBJECT_0)
-          if (WaitForSingleObject(DataIO.hQuit,1) == WAIT_OBJECT_0)
+        DataIO.hBufferFilled->Reset();
+        DataIO.hBufferEmpty->Set();
+        while (! DataIO.hBufferFilled->WaitMSec(1))
+          if (DataIO.hQuit->WaitMSec(1))
             return;
       }
     }

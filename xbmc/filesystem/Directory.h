@@ -34,15 +34,26 @@ public:
   CDirectory(void);
   virtual ~CDirectory(void);
 
+  class CHints
+  {
+  public:
+    CHints() : flags(DIR_FLAG_DEFAULTS)
+    {
+    };
+    CStdString mask;
+    int flags;
+  };
+
   static bool GetDirectory(const CStdString& strPath
-                         , CFileItemList &items
-                         , CStdString strMask=""
-                         , bool bUseFileDirectories=true
-                         , bool allowPrompting=false
-                         , DIR_CACHE_TYPE cacheDirectory=DIR_CACHE_ONCE
-                         , bool extFileInfo=true
-                         , bool allowThreads=false
-                         , bool getHidden=false);
+                           , CFileItemList &items
+                           , const CStdString &strMask=""
+                           , int flags=DIR_FLAG_DEFAULTS
+                           , bool allowThreads=false);
+
+  static bool GetDirectory(const CStdString& strPath
+                           , CFileItemList &items
+                           , const CHints &hints
+                           , bool allowThreads=false);
 
   static bool Create(const CStdString& strPath);
   static bool Exists(const CStdString& strPath);
@@ -52,11 +63,5 @@ public:
    \param items The item list to filter
    \param mask  The mask to apply when filtering files */
   static void FilterFileDirectories(CFileItemList &items, const CStdString &mask);
-
-  /*! \brief Apply users path translation to a path, returning the translated path
-   \param path the path to fetch
-   \return translated path based on user path<->path translation table.
-   */
-  static CStdString Translate(const CStdString &path);
 };
 }

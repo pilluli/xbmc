@@ -25,12 +25,16 @@
 #include "utils/StdString.h"
 #include "guilib/Key.h"
 #include "threads/Thread.h"
+#include "threads/Event.h"
+#include <boost/shared_ptr.hpp>
 
 #include <queue>
 
 class CFileItem;
 class CFileItemList;
 class CGUIDialog;
+class CGUIWindow;
+class CGUIMessage;
 
 // defines here
 #define TMSG_DIALOG_DOMODAL       100
@@ -54,6 +58,8 @@ class CGUIDialog;
 #define TMSG_PLAYLISTPLAYER_PLAY_SONG_ID 217
 #define TMSG_PLAYLISTPLAYER_INSERT 218
 #define TMSG_PLAYLISTPLAYER_REMOVE 219
+#define TMSG_PLAYLISTPLAYER_SWAP 223
+#define TMSG_PLAYLISTPLAYER_REPEAT 224
 
 #define TMSG_PICTURE_SHOW         220
 #define TMSG_PICTURE_SLIDESHOW    221
@@ -62,7 +68,6 @@ class CGUIDialog;
 #define TMSG_SHUTDOWN             300
 #define TMSG_POWERDOWN            301
 #define TMSG_QUIT                 302
-#define TMSG_DASHBOARD            TMSG_QUIT
 #define TMSG_HIBERNATE            303
 #define TMSG_SUSPEND              304
 #define TMSG_RESTART              305
@@ -71,6 +76,8 @@ class CGUIDialog;
 #define TMSG_SWITCHTOFULLSCREEN   308
 #define TMSG_MINIMIZE             309
 #define TMSG_TOGGLEFULLSCREEN     310
+#define TMSG_SETLANGUAGE          311
+#define TMSG_RENDERER_FLUSH       312
 
 #define TMSG_HTTPAPI              400
 
@@ -80,15 +87,16 @@ class CGUIDialog;
 #define TMSG_GUI_SHOW                 601
 #define TMSG_GUI_ACTIVATE_WINDOW      604
 #define TMSG_GUI_PYTHON_DIALOG        605
-#define TMSG_GUI_DIALOG_CLOSE         606
+#define TMSG_GUI_WINDOW_CLOSE         606
 #define TMSG_GUI_ACTION               607
 #define TMSG_GUI_INFOLABEL            608
 #define TMSG_GUI_INFOBOOL             609
-
-#define TMSG_OPTICAL_MOUNT        700
-#define TMSG_OPTICAL_UNMOUNT      701
+#define TMSG_GUI_MESSAGE              610
 
 #define TMSG_CALLBACK             800
+
+#define TMSG_VOLUME_SHOW          900
+#define TMSG_SPLASH_MESSAGE       901
 
 typedef struct
 {
@@ -97,7 +105,7 @@ typedef struct
   DWORD dwParam2;
   CStdString strParam;
   std::vector<CStdString> params;
-  HANDLE hWaitEvent;
+  boost::shared_ptr<CEvent> waitEvent;
   LPVOID lpVoid;
 }
 ThreadMessage;
@@ -135,6 +143,7 @@ public:
   void MediaPlay(std::string filename);
   void MediaPlay(const CFileItem &item);
   void MediaPlay(const CFileItemList &item, int song = 0);
+  void MediaPlay(int playlistid, int song = -1);
   void MediaStop();
   void MediaPause();
   void MediaRestart(bool bWait);
@@ -152,17 +161,19 @@ public:
   void PlayListPlayerInsert(int playlist, const CFileItem &item, int position); 
   void PlayListPlayerInsert(int playlist, const CFileItemList &list, int position);
   void PlayListPlayerRemove(int playlist, int position);
+  void PlayListPlayerSwap(int playlist, int indexItem1, int indexItem2);
+  void PlayListPlayerRepeat(int playlist, int repeatState);
 
   void PlayFile(const CFileItem &item, bool bRestart = false); // thread safe version of g_application.PlayFile()
   void PictureShow(std::string filename);
   void PictureSlideShow(std::string pathname, bool bScreensaver = false, bool addTBN = false);
+  void SetGUILanguage(const std::string &strLanguage);
   void Shutdown();
   void Powerdown();
   void Quit();
   void Hibernate();
   void Suspend();
   void Restart();
-  void RebootToDashBoard();
   void RestartApp();
   void Reset();
   void SwitchToFullscreen(); //
@@ -179,14 +190,25 @@ public:
 
   void DoModal(CGUIDialog *pDialog, int iWindowID, const CStdString &param = "");
   void Show(CGUIDialog *pDialog);
-  void Close(CGUIDialog *pDialog, bool forceClose, bool waitResult=true);
+  void Close(CGUIWindow *window, bool forceClose, bool waitResult = true, int nextWindowID = 0, bool enableSound = true);
   void ActivateWindow(int windowID, const std::vector<CStdString> &params, bool swappingWindows);
   void SendAction(const CAction &action, int windowID = WINDOW_INVALID, bool waitResult=true);
+
+  /*! \brief Send a GUIMessage, optionally waiting before it's processed to return.
+   Should be used to send messages to the GUI from other threads.
+   \param msg the GUIMessage to send.
+   \param windowID optional window to send the message to (defaults to no specified window).
+   \param waitResult whether to wait for the result (defaults to false).
+   */
+  void SendGUIMessage(const CGUIMessage &msg, int windowID = WINDOW_INVALID, bool waitResult=false);
+
   std::vector<CStdString> GetInfoLabels(const std::vector<CStdString> &properties);
   std::vector<bool> GetInfoBooleans(const std::vector<CStdString> &properties);
 
-  void OpticalMount(CStdString device, bool bautorun=false);
-  void OpticalUnMount(CStdString device);
+  void ShowVolumeBar(bool up);
+
+  void SetSplashMessage(const CStdString& message);
+  void SetSplashMessage(int stringID);
 
 private:
   void ProcessMessage(ThreadMessage *pMsg);

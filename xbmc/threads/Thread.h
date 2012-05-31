@@ -23,19 +23,18 @@
 //
 //////////////////////////////////////////////////////////////////////
 
-#if !defined(AFX_THREAD_H__ACFB7357_B961_4AC1_9FB2_779526219817__INCLUDED_) && !defined(AFX_THREAD_H__67621B15_8724_4B5D_9343_7667075C89F2__INCLUDED_)
-#define AFX_THREAD_H__ACFB7357_B961_4AC1_9FB2_779526219817__INCLUDED_
-
-#if _MSC_VER > 1000
 #pragma once
-#endif // _MSC_VER > 1000
 
-#include "system.h" // for HANDLE
-#ifdef _LINUX
-#include "PlatformInclude.h"
-#endif
+#include <string>
+#include <stdint.h>
 #include "Event.h"
-#include "utils/StdString.h"
+#include "threads/ThreadImpl.h"
+#include "threads/ThreadLocal.h"
+#include "commons/ilog.h"
+
+#ifdef TARGET_DARWIN
+#include <mach/mach.h>
+#endif
 
 class IRunnable
 {
@@ -44,76 +43,91 @@ public:
   virtual ~IRunnable() {}
 };
 
-#ifdef CTHREAD
-#undef CTHREAD
-#endif
-
 // minimum as mandated by XTL
 #define THREAD_MINSTACKSIZE 0x10000
 
+namespace XbmcThreads { class ThreadSettings; }
+
 class CThread
 {
+  static XbmcCommons::ILogger* logger;
+
+protected:
+  CThread(const char* ThreadName);
+
 public:
-  CThread(const char* ThreadName = NULL);
-  CThread(IRunnable* pRunnable, const char* ThreadName = NULL);
+  CThread(IRunnable* pRunnable, const char* ThreadName);
   virtual ~CThread();
   void Create(bool bAutoDelete = false, unsigned stacksize = 0);
   bool WaitForThreadExit(unsigned int milliseconds);
-  DWORD WaitForSingleObject(HANDLE hHandle, unsigned int milliseconds);
-  DWORD WaitForMultipleObjects(DWORD nCount, HANDLE *lpHandles, BOOL bWaitAll, unsigned int milliseconds);
   void Sleep(unsigned int milliseconds);
   bool SetPriority(const int iPriority);
-  void SetPrioritySched_RR(void);
+  int GetPriority(void);
   int GetMinPriority(void);
   int GetMaxPriority(void);
   int GetNormalPriority(void);
-  void SetName( LPCTSTR szThreadName );
-  HANDLE ThreadHandle();
-  operator HANDLE();
-  operator HANDLE() const;
+  int GetSchedRRPriority(void);
+  bool SetPrioritySched_RR(int iPriority);
   bool IsAutoDelete() const;
   virtual void StopThread(bool bWait = true);
   float GetRelativeUsage();  // returns the relative cpu usage of this thread since last call
+  int64_t GetAbsoluteUsage();
   bool IsCurrentThread() const;
+  bool IsRunning();
 
   static bool IsCurrentThread(const ThreadIdentifier tid);
   static ThreadIdentifier GetCurrentThreadId();
+  static CThread* GetCurrentThread();
+  static inline void SetLogger(XbmcCommons::ILogger* logger_) { CThread::logger = logger_; }
 protected:
   virtual void OnStartup(){};
   virtual void OnExit(){};
   virtual void OnException(){} // signal termination handler
   virtual void Process();
 
-#ifdef _LINUX
-  static void term_handler (int signum);
-#endif
-
   volatile bool m_bStop;
-  HANDLE m_ThreadHandle;
+
+  enum WaitResponse { WAIT_INTERRUPTED = -1, WAIT_SIGNALED = 0, WAIT_TIMEDOUT = 1 };
+
+  /**
+   * This call will wait on a CEvent in an interruptible way such that if
+   *  stop is called on the thread the wait will return with a respone
+   *  indicating what happened.
+   */
+  inline WaitResponse AbortableWait(CEvent& event, int timeoutMillis)
+  {
+    XbmcThreads::CEventGroup group(&event, &m_StopEvent, NULL);
+    CEvent* result = group.wait(timeoutMillis);
+    return  result == &event ? WAIT_SIGNALED :
+      (result == NULL ? WAIT_TIMEDOUT : WAIT_INTERRUPTED);
+  }
+
+  inline WaitResponse AbortableWait(CEvent& event)
+  {
+    XbmcThreads::CEventGroup group(&event, &m_StopEvent, NULL);
+    CEvent* result = group.wait();
+    return  result == &event ? WAIT_SIGNALED :
+      (result == NULL ? WAIT_TIMEDOUT : WAIT_INTERRUPTED);
+  }
 
 private:
-  CStdString GetTypeName(void);
-
-private:
+  static THREADFUNC staticThread(void *data);
   ThreadIdentifier ThreadId() const;
-  bool m_bAutoDelete;
-  HANDLE m_StopEvent;
-  unsigned m_ThreadId; // This value is unreliable on platforms using pthreads
-                       // Use m_ThreadHandle->m_hThread instead
-  IRunnable* m_pRunnable;
+  void SetThreadInfo();
+  void TermHandler();
+  void Action();
 
-  unsigned __int64 m_iLastUsage;
-  unsigned __int64 m_iLastTime;
+  ThreadIdentifier m_ThreadId;
+  ThreadOpaque m_ThreadOpaque;
+  bool m_bAutoDelete;
+  CEvent m_StopEvent;
+  CEvent m_TermEvent;
+  CEvent m_StartEvent;
+  CCriticalSection m_CriticalSection;
+  IRunnable* m_pRunnable;
+  uint64_t m_iLastUsage;
+  uint64_t m_iLastTime;
   float m_fLastUsage;
 
-  CStdString m_ThreadName;
-
-private:
-#ifndef _WIN32
-  static int staticThread(void* data);
-#else
-  static DWORD WINAPI staticThread(LPVOID* data);
-#endif
+  std::string m_ThreadName;
 };
-
-#endif // !defined(AFX_THREAD_H__ACFB7357_B961_4AC1_9FB2_779526219817__INCLUDED_)

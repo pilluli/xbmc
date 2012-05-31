@@ -26,8 +26,9 @@
 
 class TiXmlElement;
 
-struct DatabaseSettings
+class DatabaseSettings
 {
+public:
   CStdString type;
   CStdString host;
   CStdString port;
@@ -40,10 +41,12 @@ struct TVShowRegexp
 {
   bool byDate;
   CStdString regexp;
-  TVShowRegexp(bool d, const CStdString& r)
+  int defaultSeason;
+  TVShowRegexp(bool d, const CStdString& r, int s = 1)
   {
     byDate = d;
     regexp = r;
+    defaultSeason = s;
   }
 };
 
@@ -56,6 +59,15 @@ struct RefreshOverride
   float refreshmax;
 
   bool  fallback;
+};
+
+
+struct RefreshVideoLatency
+{
+  float refreshmin;
+  float refreshmax;
+
+  float delay;
 };
 
 typedef std::vector<TVShowRegexp> SETTINGS_TVSHOWLIST;
@@ -82,6 +94,15 @@ class CAdvancedSettings
     CStdString m_audioDefaultPlayer;
     float m_audioPlayCountMinimumPercent;
     bool m_dvdplayerIgnoreDTSinWAV;
+    int m_audioResample;
+    bool m_allowTranscode44100;
+    bool m_audioForceDirectSound;
+    bool m_audioAudiophile;
+    bool m_allChannelStereo;
+    int m_audioSinkBufferDurationMsec;
+    CStdString m_audioTranscodeTo;
+    float m_limiterHold;
+    float m_limiterRelease;
 
     float m_videoSubsDelayRange;
     float m_videoAudioDelayRange;
@@ -108,7 +129,6 @@ class CAdvancedSettings
     int m_musicPercentSeekBackward;
     int m_musicPercentSeekForwardBig;
     int m_musicPercentSeekBackwardBig;
-    int m_musicResample;
     int m_videoBlackBarColour;
     int m_videoIgnoreSecondsAtStart;
     float m_videoIgnorePercentAtEnd;
@@ -117,12 +137,20 @@ class CAdvancedSettings
 
     bool  m_videoVDPAUScaling;
     float m_videoNonLinStretchRatio;
-    bool  m_videoAllowLanczos3;
+    bool  m_videoEnableHighQualityHwScalers;
     float m_videoAutoScaleMaxFps;
     bool  m_videoAllowMpeg4VDPAU;
+    bool  m_videoAllowMpeg4VAAPI;
     std::vector<RefreshOverride> m_videoAdjustRefreshOverrides;
+    std::vector<RefreshVideoLatency> m_videoRefreshLatency;
+    float m_videoDefaultLatency;
+    bool m_videoDisableBackgroundDeinterlace;
+    int  m_videoCaptureUseOcclusionQuery;
     bool m_DXVACheckCompatibility;
     bool m_DXVACheckCompatibilityPresent;
+    bool m_DXVAForceProcessorRenderer;
+    bool m_DXVANoDeintProcForProgressive;
+    int  m_videoFpsDetect;
 
     CStdString m_videoDefaultPlayer;
     CStdString m_videoDefaultDVDPlayer;
@@ -132,12 +160,6 @@ class CAdvancedSettings
     float m_slideshowZoomAmount;
     float m_slideshowPanAmount;
 
-    int m_lcdRows;
-    int m_lcdColumns;
-    int m_lcdAddress1;
-    int m_lcdAddress2;
-    int m_lcdAddress3;
-    int m_lcdAddress4;
     bool m_lcdHeartbeat;
     bool m_lcdDimOnScreenSave;
     int m_lcdScrolldelay;
@@ -150,11 +172,15 @@ class CAdvancedSettings
     int m_logLevel;
     int m_logLevelHint;
     CStdString m_cddbAddress;
+    
+    //airtunes + airplay
+    bool m_logEnableAirtunes;
+    int m_airTunesPort;
+    int m_airPlayPort;    
 
     bool m_handleMounting;
 
     bool m_fullScreenOnMovieStart;
-    bool m_noDVDROM;
     CStdString m_cachePath;
     CStdString m_videoCleanDateTimeRegExp;
     CStdStringArray m_videoCleanStringRegExps;
@@ -165,6 +191,7 @@ class CAdvancedSettings
     CStdStringArray m_audioExcludeFromScanRegExps;
     CStdStringArray m_pictureExcludeFromListingRegExps;
     CStdStringArray m_videoStackRegExps;
+    CStdStringArray m_folderStackRegExps;
     CStdStringArray m_trailerMatchRegExps;
     SETTINGS_TVSHOWLIST m_tvshowEnumRegExps;
     CStdString m_tvshowMultiPartEnumRegExp;
@@ -214,7 +241,6 @@ class CAdvancedSettings
 
     bool m_bVideoScannerIgnoreErrors;
 
-    bool m_bUseEvilB;
     std::vector<CStdString> m_vecTokens; // cleaning strings tied to language
     //TuxBox
     int m_iTuxBoxStreamtsPort;
@@ -287,6 +313,7 @@ class CAdvancedSettings
 
     bool m_guiVisualizeDirtyRegions;
     int  m_guiAlgorithmDirtyRegions;
+    int  m_guiDirtyRegionNoFlipTimeout;
 
     unsigned int m_cacheMemBufferSize;
 
@@ -296,6 +323,8 @@ class CAdvancedSettings
     bool m_enableMultimediaKeys;
     std::vector<CStdString> m_settingsFiles;
     void ParseSettingsFile(const CStdString &file);
+
+    float GetDisplayLatency(float refreshrate);
 };
 
 XBMC_GLOBAL(CAdvancedSettings,g_advancedSettings);

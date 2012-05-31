@@ -76,7 +76,7 @@ CNfoFile::NFOResult CNfoFile::Create(const CStdString& strPath, const ScraperPtr
       int infos=0;
       while (m_headofdoc && details.m_iEpisode != episode)
       {
-        m_headofdoc = strstr(m_headofdoc+1,"<episodedetails>");
+        m_headofdoc = strstr(m_headofdoc+1,"<episodedetails");
         bNfo  = GetDetails(details);
         infos++;
       }
@@ -134,7 +134,8 @@ int CNfoFile::Scrape(ScraperPtr& scraper)
   catch (const CScraperError &sce)
   {
     CVideoInfoDownloader::ShowErrorDialog(sce);
-    return 2;
+    if (!sce.FAborted())
+      return 2;
   }
 
   if (!m_scurl.m_url.empty())

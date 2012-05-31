@@ -25,6 +25,8 @@
 #include "utils/CharsetConverter.h"
 #include "utils/Variant.h"
 
+using namespace std;
+
 CGUIListItem::CGUIListItem(const CGUIListItem& item)
 {
   m_layout = NULL;
@@ -165,6 +167,25 @@ CStdString CGUIListItem::GetOverlayImage() const
   }
 }
 
+map<string, string> CGUIListItem::GetArt() const
+{
+  map<string, string> art;
+  if (HasThumbnail())
+    art.insert(make_pair("thumb", GetThumbnailImage()));
+  if (HasProperty("fanart_image"))
+    art.insert(make_pair("fanart", GetProperty("fanart_image").asString()));
+  return art;
+}
+
+void CGUIListItem::SetArt(const map<string, string> &art)
+{
+  map<string, string>::const_iterator i = art.find("thumb");
+  if (i != art.end())
+    SetThumbnailImage(i->second);
+  if ((i = art.find("fanart")) != art.end())
+    SetProperty("fanart_image", i->second);
+}
+
 void CGUIListItem::Select(bool bOnOff)
 {
   m_bSelected = bOnOff;
@@ -221,7 +242,7 @@ void CGUIListItem::Archive(CArchive &ar)
     ar << m_bSelected;
     ar << m_overlayIcon;
     ar << (int)m_mapProperties.size();
-    for (std::map<CStdString, CStdString, icompare>::const_iterator it = m_mapProperties.begin(); it != m_mapProperties.end(); it++)
+    for (PropertyMap::const_iterator it = m_mapProperties.begin(); it != m_mapProperties.end(); it++)
     {
       ar << it->first;
       ar << it->second;
@@ -245,7 +266,8 @@ void CGUIListItem::Archive(CArchive &ar)
     ar >> mapSize;
     for (int i = 0; i < mapSize; i++)
     {
-      CStdString key, value;
+      CStdString key;
+      CVariant value;
       ar >> key;
       ar >> value;
       SetProperty(key, value);
@@ -262,7 +284,7 @@ void CGUIListItem::Serialize(CVariant &value)
   value["strIcon"] = m_strIcon;
   value["selected"] = m_bSelected;
 
-  for (std::map<CStdString, CStdString, icompare>::const_iterator it = m_mapProperties.begin(); it != m_mapProperties.end(); it++)
+  for (PropertyMap::const_iterator it = m_mapProperties.begin(); it != m_mapProperties.end(); it++)
   {
     value["properties"][it->first] = it->second;
   }
@@ -320,21 +342,16 @@ void CGUIListItem::SetInvalid()
   if (m_focusedLayout) m_focusedLayout->SetInvalid();
 }
 
-void CGUIListItem::SetProperty(const CStdString &strKey, const char *strValue)
+void CGUIListItem::SetProperty(const CStdString &strKey, const CVariant &value)
 {
-  m_mapProperties[strKey] = strValue;
+  m_mapProperties[strKey] = value;
 }
 
-void CGUIListItem::SetProperty(const CStdString &strKey, const CStdString &strValue)
-{
-  m_mapProperties[strKey] = strValue;
-}
-
-CStdString CGUIListItem::GetProperty(const CStdString &strKey) const
+CVariant CGUIListItem::GetProperty(const CStdString &strKey) const
 {
   PropertyMap::const_iterator iter = m_mapProperties.find(strKey);
   if (iter == m_mapProperties.end())
-    return "";
+    return CVariant(CVariant::VariantTypeNull);
 
   return iter->second;
 }
@@ -360,52 +377,18 @@ void CGUIListItem::ClearProperties()
   m_mapProperties.clear();
 }
 
-void CGUIListItem::SetProperty(const CStdString &strKey, int nVal)
-{
-  CStdString strVal;
-  strVal.Format("%d",nVal);
-  SetProperty(strKey, strVal);
-}
-
 void CGUIListItem::IncrementProperty(const CStdString &strKey, int nVal)
 {
-  int i = GetPropertyInt(strKey);
+  int64_t i = GetProperty(strKey).asInteger();
   i += nVal;
   SetProperty(strKey, i);
 }
 
-void CGUIListItem::SetProperty(const CStdString &strKey, bool bVal)
-{
-  SetProperty(strKey, bVal?"1":"0");
-}
-
-void CGUIListItem::SetProperty(const CStdString &strKey, double dVal)
-{
-  CStdString strVal;
-  strVal.Format("%f",dVal);
-  SetProperty(strKey, strVal);
-}
-
 void CGUIListItem::IncrementProperty(const CStdString &strKey, double dVal)
 {
-  double d = GetPropertyDouble(strKey);
+  double d = GetProperty(strKey).asDouble();
   d += dVal;
   SetProperty(strKey, d);
-}
-
-bool CGUIListItem::GetPropertyBOOL(const CStdString &strKey) const
-{
-  return GetProperty(strKey) == "1";
-}
-
-int CGUIListItem::GetPropertyInt(const CStdString &strKey) const
-{
-  return atoi(GetProperty(strKey).c_str()) ;
-}
-
-double CGUIListItem::GetPropertyDouble(const CStdString &strKey) const
-{
-  return atof(GetProperty(strKey).c_str()) ;
 }
 
 void CGUIListItem::AppendProperties(const CGUIListItem &item)

@@ -22,6 +22,7 @@
  */
 
 #include "DVDOverlay.h"
+#include "PlatformDefs.h"
 
 #include <string>
 
@@ -32,7 +33,7 @@
 
 class CDVDStreamInfo;
 class CDVDCodecOption;
-typedef std::vector<CDVDCodecOption> CDVDCodecOptions;
+class CDVDCodecOptions;
 
 class CDVDOverlayCodec
 {

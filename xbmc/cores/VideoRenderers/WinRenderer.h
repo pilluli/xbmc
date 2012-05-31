@@ -29,6 +29,10 @@
 #include "guilib/D3DResource.h"
 #include "RenderCapture.h"
 #include "settings/VideoSettings.h"
+#include "cores/dvdplayer/DVDCodecs/Video/DXVA.h"
+#include "cores/VideoRenderers/RenderFlags.h"
+#include "cores/VideoRenderers/RenderFormats.h"
+
 //#define MP_DIRECTRENDERING
 
 #ifdef MP_DIRECTRENDERING
@@ -49,28 +53,6 @@
 
 #define IMAGE_FLAG_INUSE (IMAGE_FLAG_WRITING | IMAGE_FLAG_READING | IMAGE_FLAG_RESERVED)
 
-
-#define RENDER_FLAG_BOT         0x01
-#define RENDER_FLAG_TOP         0x02
-#define RENDER_FLAG_BOTH (RENDER_FLAG_BOT | RENDER_FLAG_TOP)
-#define RENDER_FLAG_FIELDMASK   0x03
-
-#define RENDER_FLAG_NOOSD       0x04 /* don't draw any osd */
-
-/* these two flags will be used if we need to render same image twice (bob deinterlacing) */
-#define RENDER_FLAG_NOLOCK      0x10   /* don't attempt to lock texture before rendering */
-#define RENDER_FLAG_NOUNLOCK    0x20   /* don't unlock texture after rendering */
-
-/* this defines what color translation coefficients */
-#define CONF_FLAGS_YUVCOEF_MASK(a) ((a) & 0x07)
-#define CONF_FLAGS_YUVCOEF_BT709 0x01
-#define CONF_FLAGS_YUVCOEF_BT601 0x02
-#define CONF_FLAGS_YUVCOEF_240M  0x03
-#define CONF_FLAGS_YUVCOEF_EBU   0x04
-
-#define CONF_FLAGS_YUV_FULLRANGE 0x08
-#define CONF_FLAGS_FULLSCREEN    0x10
-
 class CBaseTexture;
 class CYUV2RGBShader;
 class CConvolutionShader;
@@ -79,7 +61,7 @@ class DllAvUtil;
 class DllAvCodec;
 class DllSwScale;
 
-namespace DXVA { class CProcessor; }
+struct DVDVideoPicture;
 
 struct DRAWRECT
 {
@@ -88,15 +70,6 @@ struct DRAWRECT
   float right;
   float bottom;
 };
-
-enum EFIELDSYNC
-{
-  FS_NONE,
-  FS_TOP,
-  FS_BOT,
-  FS_BOTH,
-};
-
 
 struct YUVRANGE
 {
@@ -122,15 +95,6 @@ enum RenderMethod
 #define FIELD_TOP 1
 #define FIELD_BOT 2
 
-enum BufferFormat
-{
-  Invalid,
-  YV12,
-  NV12,
-  YUY2,
-  UYVY
-};
-
 struct SVideoBuffer
 {
   virtual ~SVideoBuffer() {}
@@ -150,7 +114,7 @@ struct SVideoPlane
 struct YUVBuffer : SVideoBuffer
 {
   ~YUVBuffer();
-  bool Create(BufferFormat format, unsigned int width, unsigned int height);
+  bool Create(ERenderFormat format, unsigned int width, unsigned int height);
   virtual void Release();
   virtual void StartDecode();
   virtual void StartRender();
@@ -162,7 +126,7 @@ struct YUVBuffer : SVideoBuffer
 private:
   unsigned int     m_width;
   unsigned int     m_height;
-  BufferFormat     m_format;
+  ERenderFormat    m_format;
   unsigned int     m_activeplanes;
 };
 
@@ -170,14 +134,12 @@ struct DXVABuffer : SVideoBuffer
 {
   DXVABuffer()
   {
-    proc = NULL;
     id   = 0;
   }
   ~DXVABuffer();
   virtual void Release();
   virtual void StartDecode();
 
-  DXVA::CProcessor* proc;
   int64_t           id;
 };
 
@@ -193,24 +155,28 @@ public:
   bool RenderCapture(CRenderCapture* capture);
 
   // Player functions
-  virtual bool         Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags);
+  virtual bool         Configure(unsigned int width, unsigned int height, unsigned int d_width, unsigned int d_height, float fps, unsigned flags, ERenderFormat format, unsigned extended_format);
   virtual int          GetImage(YV12Image *image, int source = AUTOSOURCE, bool readonly = false);
   virtual void         ReleaseImage(int source, bool preserve = false);
-  virtual unsigned int DrawSlice(unsigned char *src[], int stride[], int w, int h, int x, int y);
-  virtual void         AddProcessor(DXVA::CProcessor* processor, int64_t id);
+  virtual bool         AddVideoPicture(DVDVideoPicture* picture);
   virtual void         FlipPage(int source);
   virtual unsigned int PreInit();
   virtual void         UnInit();
   virtual void         Reset(); /* resets renderer after seek for example */
   virtual bool         IsConfigured() { return m_bConfigured; }
 
+  virtual std::vector<ERenderFormat> SupportedFormats() { return m_formats; }
+
   virtual bool         Supports(ERENDERFEATURE feature);
+  virtual bool         Supports(EDEINTERLACEMODE mode);
   virtual bool         Supports(EINTERLACEMETHOD method);
   virtual bool         Supports(ESCALINGMETHOD method);
 
+  virtual EINTERLACEMETHOD AutoInterlaceMethod();
+
   void                 RenderUpdate(bool clear, DWORD flags = 0, DWORD alpha = 255);
 
-  static void          CropSource(RECT& src, RECT& dst, const D3DSURFACE_DESC& desc);
+  virtual unsigned int GetProcessorSize() { return m_processor.Size(); }
 
 protected:
   virtual void Render(DWORD flags);
@@ -242,6 +208,8 @@ protected:
   bool                 m_bConfigured;
   SVideoBuffer        *m_VideoBuffers[NUM_BUFFERS];
   RenderMethod         m_renderMethod;
+  DXVA::CProcessor     m_processor;
+  std::vector<ERenderFormat> m_formats;
 
   // software scale libraries (fallback if required pixel shaders version is not available)
   DllAvUtil           *m_dllAvUtil;
@@ -267,9 +235,18 @@ protected:
 
   bool                 m_bFilterInitialized;
 
+  int                  m_iRequestedMethod;
+
   // clear colour for "black" bars
   DWORD                m_clearColour;
   unsigned int         m_flags;
+  ERenderFormat        m_format;
+  unsigned int         m_extended_format;
+
+  // Width and height of the render target
+  // the separable HQ scalers need this info, but could the m_destRect be used instead?
+  unsigned int         m_destWidth;
+  unsigned int         m_destHeight;
 };
 
 #else

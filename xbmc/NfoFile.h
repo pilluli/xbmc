@@ -29,7 +29,7 @@
 #pragma once
 #endif // _MSC_VER > 1000
 
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "addons/Scraper.h"
 #include "utils/CharsetConverter.h"
 
@@ -51,9 +51,9 @@ public:
   NFOResult Create(const CStdString&, const ADDON::ScraperPtr&, int episode=-1,
                    const CStdString& strPath2="");
   template<class T>
-    bool GetDetails(T& details,const char* document=NULL)
+    bool GetDetails(T& details,const char* document=NULL, bool prioritise=false)
   {
-    TiXmlDocument doc;
+    CXBMCTinyXML doc;
     CStdString strDoc;
     if (document)
       strDoc = document;
@@ -64,7 +64,7 @@ public:
       g_charsetConverter.unknownToUTF8(strDoc);
 
     doc.Parse(strDoc.c_str());
-    return details.Load(doc.RootElement(),true);
+    return details.Load(doc.RootElement(), true, prioritise);
   }
 
   void Close();

@@ -27,6 +27,18 @@
 
 namespace ADDON
 {
+  /* \brief Addon versioning using the debian versioning scheme
+
+    AddonVersion uses debian versioning, which means in the each section of the period
+    separated version string, numbers are compared numerically rather than lexicographically,
+    thus any preceding zeros are ignored.
+
+    i.e. 1.00 is considered the same as 1.0, and 1.01 is considered the same as 1.1.
+
+    Further, 1.0 < 1.0.0
+
+    See here for more info: http://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-Version
+    */
   class AddonVersion : public boost::totally_ordered<AddonVersion> {
   public:
     AddonVersion(const AddonVersion& other) : mUpstream(NULL), mRevision(NULL) { *this = other; }
@@ -42,6 +54,11 @@ namespace ADDON
     bool operator==(const AddonVersion& other) const;
     CStdString Print() const;
     const char *c_str() const { return m_originalVersion.c_str(); };
+
+    static bool SplitFileName(CStdString& ID, CStdString& version,
+                              const CStdString& filename);
+
+    static bool Test();
   protected:
     CStdString m_originalVersion;
     int mEpoch;
@@ -55,13 +72,6 @@ namespace ADDON
   {
     free(mUpstream);
     free(mRevision);
-  }
-
-  inline bool AddonVersion::operator==(const AddonVersion& other) const
-  {
-    return Epoch() == other.Epoch()
-      && strcmp(Upstream(), other.Upstream()) == 0
-      && strcmp(Revision(), other.Revision()) == 0;
   }
 
   inline AddonVersion& AddonVersion::operator=(const AddonVersion& other)

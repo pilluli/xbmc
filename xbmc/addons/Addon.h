@@ -22,7 +22,7 @@
 
 #include "IAddon.h"
 #include "addons/AddonVersion.h"
-#include "tinyXML/tinyxml.h"
+#include "utils/XBMCTinyXML.h"
 #include "Util.h"
 #include "URL.h"
 #include "guilib/LocalizeStrings.h"
@@ -168,6 +168,7 @@ public:
    \return true if  min_version <= version <= current_version, false otherwise.
    */
   bool MeetsVersion(const AddonVersion &version) const;
+  virtual bool ReloadSettings();
 
 protected:
   CAddon(const CAddon&); // protected as all copying is handled by Clone()
@@ -176,10 +177,11 @@ protected:
   virtual void BuildLibName(const cp_extension_t *ext = NULL);
 
   /*! \brief Load the default settings and override these with any previously configured user settings
+   \param bForce force the load of settings even if they are already loaded (reload)
    \return true if settings exist, false otherwise
    \sa LoadUserSettings, SaveSettings, HasSettings, HasUserSettings, GetSetting, UpdateSetting
    */
-  virtual bool LoadSettings();
+  virtual bool LoadSettings(bool bForce = false);
 
   /*! \brief Load the user settings
    \return true if user settings exist, false otherwise
@@ -193,15 +195,15 @@ protected:
    \return true if settings are loaded, false otherwise
    \sa SettingsToXML
    */
-  bool SettingsFromXML(const TiXmlDocument &doc, bool loadDefaults = false);
+  bool SettingsFromXML(const CXBMCTinyXML &doc, bool loadDefaults = false);
 
   /*! \brief Parse settings into an XML document
    \param doc XML document to receive the settings
    \sa SettingsFromXML
    */
-  void SettingsToXML(TiXmlDocument &doc) const;
+  void SettingsToXML(CXBMCTinyXML &doc) const;
 
-  TiXmlDocument     m_addonXmlDoc;
+  CXBMCTinyXML      m_addonXmlDoc;
   CStdString        m_strLibName;
   bool              m_settingsLoaded;
   bool              m_userSettingsLoaded;

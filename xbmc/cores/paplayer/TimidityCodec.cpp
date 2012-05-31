@@ -25,6 +25,7 @@
 #include "../DllLoader/DllLoader.h"
 #include "Util.h"
 #include "utils/log.h"
+#include "filesystem/SpecialProtocol.h"
 #ifdef _WIN32
 #include "../DllLoader/Win32DllLoader.h"
 #endif
@@ -104,7 +105,16 @@ bool TimidityCodec::Init(const CStdString &strFile, unsigned int filecache)
   if ( m_mid )
     m_dll.FreeMID( m_mid );
 
-  m_mid = m_dll.LoadMID(strFile.c_str());
+  CStdString file = strFile;
+  CURL url(strFile);
+  if (!url.IsLocal())
+  {
+    CStdString file = CUtil::GetNextFilename("special://temp/midi%03d.mid",999);
+    XFILE::CFile::Cache(strFile,file);
+    url.Parse(file);
+  }
+
+  m_mid = m_dll.LoadMID(CSpecialProtocol::TranslatePath(url.Get()).c_str());
   if (!m_mid)
   {
     CLog::Log(LOGERROR,"TimidityCodec: error opening file %s: %s",strFile.c_str(), m_dll.ErrorMsg());
@@ -114,7 +124,8 @@ bool TimidityCodec::Init(const CStdString &strFile, unsigned int filecache)
   m_Channels = 2;
   m_SampleRate = 48000;
   m_BitsPerSample = 16;
-  m_TotalTime = (__int64)m_dll.GetLength(m_mid);
+  m_DataFormat = AE_FMT_S16NE;
+  m_TotalTime = (int64_t)m_dll.GetLength(m_mid);
 
   return true;
 }
@@ -135,9 +146,9 @@ void TimidityCodec::DeInit()
   m_loader = 0;
 }
 
-__int64 TimidityCodec::Seek(__int64 iSeekTime)
+int64_t TimidityCodec::Seek(int64_t iSeekTime)
 {
-  __int64 result = (__int64)m_dll.Seek(m_mid,(unsigned long)iSeekTime);
+  int64_t result = (int64_t)m_dll.Seek(m_mid,(unsigned long)iSeekTime);
   m_iDataPos = result/1000*48000*4;
 
   return result;

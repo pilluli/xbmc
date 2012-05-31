@@ -19,6 +19,7 @@
  *
  */
 
+#include "threads/SystemClock.h"
 #include "PlatformInclude.h"
 #include "XLCDproc.h"
 #include "../utils/log.h"
@@ -39,6 +40,8 @@ XLCDproc::XLCDproc()
   m_iActualpos   = 0;
   m_iBackLight   = 32;
   m_iLCDContrast = 50;
+  m_iColumns     = 0;
+  m_iRows        = 0;
   m_bStop        = true;
   m_sockfd       = -1;
   m_lastInitAttempt = 0;
@@ -56,8 +59,8 @@ void XLCDproc::Initialize()
     return ;//nothing to do
 
   // don't try to initialize too often
-  int now = CTimeUtils::GetTimeMS();
-  if (now < m_lastInitAttempt + m_initRetryInterval)
+  int now = XbmcThreads::SystemClockMillis();
+  if ((now - m_lastInitAttempt) < m_initRetryInterval)
     return;
   m_lastInitAttempt = now;
 
@@ -217,6 +220,9 @@ void XLCDproc::SetBackLight(int iLight)
     cmd.append("widget_del xbmc line2\n");
     cmd.append("widget_del xbmc line3\n");
     cmd.append("widget_del xbmc line4\n");
+    
+    for(int i=0; i<4; i++)
+      m_strLine[i] = "";
   }
   else if (iLight > 0)
   {
@@ -288,6 +294,16 @@ void XLCDproc::Resume()
     CLog::Log(LOGERROR, "XLCDproc::%s - Unable to write to socket", __FUNCTION__);
     CloseSocket();
   }
+}
+
+int XLCDproc::GetColumns()
+{
+  return m_iColumns;
+}
+
+int XLCDproc::GetRows()
+{
+  return m_iRows;
 }
 
 void XLCDproc::SetLine(int iLine, const CStdString& strLine)

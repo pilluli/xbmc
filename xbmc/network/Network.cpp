@@ -27,8 +27,10 @@
 #include "utils/RssReader.h"
 #include "utils/log.h"
 #include "guilib/LocalizeStrings.h"
+#include "dialogs/GUIDialogKaiToast.h"
 
 #include <netinet/in.h>
+#include <sys/socket.h>
 #include <arpa/inet.h>
 
 using namespace std;
@@ -118,6 +120,16 @@ int CNetwork::ParseHex(char *str, unsigned char *addr)
 
    return len;
 }
+
+CStdString CNetwork::GetHostName(void)
+{
+  char hostName[128];
+  if (gethostname(hostName, sizeof(hostName)))
+    return CStdString("unknown");
+  else
+    return CStdString(hostName);
+}
+
 
 CNetworkInterface* CNetwork::GetFirstConnectedInterface()
 {
@@ -274,24 +286,24 @@ void CNetwork::StartServices()
 #endif
 #ifdef HAS_WEB_SERVER
   if (!g_application.StartWebServer())
-    g_application.m_guiDialogKaiToast.QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33101), g_localizeStrings.Get(33100));
+    CGUIDialogKaiToast::QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33101), g_localizeStrings.Get(33100));
 #endif
 #ifdef HAS_UPNP
   g_application.StartUPnP();
 #endif
 #ifdef HAS_EVENT_SERVER
   if (!g_application.StartEventServer())
-    g_application.m_guiDialogKaiToast.QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33102), g_localizeStrings.Get(33100));
-#endif
-#ifdef HAS_DBUS_SERVER
-  g_application.StartDbusServer();
+    CGUIDialogKaiToast::QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33102), g_localizeStrings.Get(33100));
 #endif
 #ifdef HAS_JSONRPC
   if (!g_application.StartJSONRPCServer())
-    g_application.m_guiDialogKaiToast.QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33103), g_localizeStrings.Get(33100));
+    CGUIDialogKaiToast::QueueNotification("DefaultIconWarning.png", g_localizeStrings.Get(33103), g_localizeStrings.Get(33100));
 #endif
 #ifdef HAS_ZEROCONF
   g_application.StartZeroconf();
+#endif
+#ifdef HAS_AIRPLAY
+  g_application.StartAirplayServer();
 #endif
   CLastfmScrobbler::GetInstance()->Init();
   CLibrefmScrobbler::GetInstance()->Init();
@@ -324,10 +336,10 @@ void CNetwork::StopServices(bool bWait)
 #ifdef HAS_EVENT_SERVER
   g_application.StopEventServer(bWait, false);
 #endif
-#ifdef HAS_DBUS_SERVER
-  g_application.StopDbusServer(bWait);
-#endif
 #ifdef HAS_JSONRPC
     g_application.StopJSONRPCServer(bWait);
+#endif
+#if defined(HAS_AIRPLAY) || defined(HAS_AIRTUNES)
+    g_application.StopAirplayServer(bWait);
 #endif
 }

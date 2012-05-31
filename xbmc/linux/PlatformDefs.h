@@ -39,20 +39,24 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <string.h>
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
 #include <stdio.h>
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <sys/sysctl.h>
 #include <mach/mach.h>
+#if defined(TARGET_DARWIN_OSX)
+#include <libkern/OSTypes.h>
+#endif
+#elif defined(__FreeBSD__)
+#include <stdio.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
 #else
 #include <sys/sysinfo.h>
 #endif
 #include <sys/time.h>
 #include <time.h>
-#endif
-
-// do not move this, it will break osx build bad"
-#ifdef HAS_SDL
-#include <SDL/SDL.h>
 #endif
 
 #if defined(__ppc__) || defined(__powerpc__)
@@ -166,7 +170,7 @@
 #define CALLBACK    __stdcall
 #define WINAPI      __stdcall
 #define WINAPIV     __cdecl
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
 #define APIENTRY    WINAPI
 #else
 #define APIENTRY
@@ -181,8 +185,6 @@
 #define __try try
 #define EXCEPTION_EXECUTE_HANDLER ...
 //NOTE: dont try to define __except because it breaks g++ (already uses it).
-
-typedef pthread_t ThreadIdentifier;
 
 struct CXHandle; // forward declaration
 typedef CXHandle* HANDLE;
@@ -208,7 +210,11 @@ typedef long long     INT64;
 typedef unsigned long long    UINT64;
 typedef long        LONG;
 typedef long long     LONGLONG;
+#if defined(TARGET_DARWIN_OSX)
+typedef UInt32          ULONG;
+#else
 typedef unsigned long   ULONG;
+#endif
 typedef float         FLOAT;
 typedef size_t        SIZE_T;
 typedef void*         PVOID;
@@ -217,7 +223,11 @@ typedef void*         LPVOID;
 #define INVALID_HANDLE_VALUE     ((HANDLE)~0U)
 typedef HANDLE        HDC;
 typedef void*       HWND;
+#if defined(TARGET_DARWIN_OSX)
+typedef SInt32      HRESULT;
+#else
 typedef LONG        HRESULT;
+#endif
 typedef BYTE*       LPBYTE;
 typedef DWORD*        LPDWORD;
 typedef CONST CHAR*   LPCSTR;
@@ -333,10 +343,6 @@ typedef struct _TIME_ZONE_INFORMATION {
 
 typedef int SOCKET;
 
-class CCriticalSection;
-#define CRITICAL_SECTION     XCriticalSection
-#define LPCRITICAL_SECTION   XCriticalSection*
-
 // Thread
 typedef int (*LPTHREAD_START_ROUTINE)(void *);
 
@@ -349,27 +355,29 @@ typedef int (*LPTHREAD_START_ROUTINE)(void *);
 #define _off_t off_t
 
 #if defined(__APPLE__)
-#include <sched.h>
-#include <AvailabilityMacros.h>
-typedef int64_t   off64_t;
-typedef off_t     __off_t;
-typedef off64_t   __off64_t;
-typedef fpos_t fpos64_t;
-#if (MAC_OS_X_VERSION_MAX_ALLOWED < 1050)
-#define __stat64 stat
-#define stat64 stat
-#define statfs64 statfs
-#define fstat64 fstat
-#elif defined(__arm__) 
-#define __stat64 stat
-#define stat64 stat
-#define statfs64 statfs
-#define fstat64 fstat
+  #include <sched.h>
+  #include <AvailabilityMacros.h>
+  typedef int64_t   off64_t;
+  typedef off_t     __off_t;
+  typedef off64_t   __off64_t;
+  typedef fpos_t fpos64_t;
+  #define __stat64 stat
+  #define stat64 stat
+  #if defined(TARGET_DARWIN_IOS)
+    #define statfs64 statfs
+  #endif
+  #define fstat64 fstat
+#elif defined(__FreeBSD__)
+  typedef int64_t   off64_t;
+  typedef off_t     __off_t;
+  typedef off64_t   __off64_t;
+  typedef fpos_t fpos64_t;
+  #define __stat64 stat
+  #define stat64 stat
+  #define statfs64 statfs
+  #define fstat64 fstat
 #else
-#define fstat64 fstat
-#endif
-#else
-#define __stat64 stat64
+  #define __stat64 stat64
 #endif
 
 struct _stati64 {
@@ -427,26 +435,32 @@ typedef struct _SECURITY_ATTRIBUTES {
 #define _stat stat
 
 // Memory
-typedef struct _MEMORYSTATUS
+typedef struct _MEMORYSTATUSEX
 {
   DWORD dwLength;
   DWORD dwMemoryLoad;
 
-  uint64_t dwTotalPhys;
-  uint64_t dwAvailPhys;
-  uint64_t dwTotalPageFile;
-  uint64_t dwAvailPageFile;
-  uint64_t dwTotalVirtual;
-  uint64_t dwAvailVirtual;
-} MEMORYSTATUS, *LPMEMORYSTATUS;
+  uint64_t ullTotalPhys;
+  uint64_t ullAvailPhys;
+  uint64_t ullTotalPageFile;
+  uint64_t ullAvailPageFile;
+  uint64_t ullTotalVirtual;
+  uint64_t ullAvailVirtual;
+} MEMORYSTATUSEX, *LPMEMORYSTATUSEX;
 
 // Common HRESULT values
 #ifndef NOERROR
 #define NOERROR           (0L)
 #endif
+#ifndef S_OK
 #define S_OK            (0L)
+#endif
+#ifndef E_FAIL
 #define E_FAIL            (0x80004005L)
+#endif
+#ifndef E_OUTOFMEMORY
 #define E_OUTOFMEMORY         (0x8007000EL)
+#endif
 #define FAILED(Status)            ((HRESULT)(Status)<0)
 
 // Basic D3D stuff
@@ -585,12 +599,6 @@ typedef struct _D3DMATRIX {
 #define FILE_SHARE_READ                  0x00000001
 #define FILE_SHARE_WRITE                 0x00000002
 #define FILE_SHARE_DELETE                0x00000004
-
-
-// String
-char *itoa(int i, char *a, int r);
-void strlwr(char* string);
-void strupr(char* string);
 
 // Audio stuff
 typedef struct tWAVEFORMATEX
