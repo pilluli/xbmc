@@ -13,13 +13,14 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include "AEBitstreamPacker.h"
+#include "AEPackIEC61937.h"
+#include "AEStreamInfo.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -54,6 +55,19 @@ void CAEBitstreamPacker::Pack(CAEStreamInfo &info, uint8_t* data, int size)
 
     case CAEStreamInfo::STREAM_TYPE_DTSHD:
       PackDTSHD (info, data, size);
+      break;
+
+    case CAEStreamInfo::STREAM_TYPE_DTSHD_CORE:
+    case CAEStreamInfo::STREAM_TYPE_DTS_512:
+      m_dataSize = CAEPackIEC61937::PackDTS_512(data, size, m_packedBuffer, info.IsLittleEndian());
+      break;
+
+    case CAEStreamInfo::STREAM_TYPE_DTS_1024:
+      m_dataSize = CAEPackIEC61937::PackDTS_1024(data, size, m_packedBuffer, info.IsLittleEndian());
+      break;
+
+    case CAEStreamInfo::STREAM_TYPE_DTS_2048:
+      m_dataSize = CAEPackIEC61937::PackDTS_2048(data, size, m_packedBuffer, info.IsLittleEndian());
       break;
 
     default:

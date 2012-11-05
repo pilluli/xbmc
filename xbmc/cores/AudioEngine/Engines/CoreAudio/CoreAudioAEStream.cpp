@@ -13,30 +13,30 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include "system.h"
-#include "threads/SingleLock.h"
-#include "utils/log.h"
-
-#include "Interfaces/AE.h"
-#include "AEFactory.h"
-#include "AEUtil.h"
 
 #include "CoreAudioAE.h"
 #include "CoreAudioAEStream.h"
 
+#include "xbmc/cores/AudioEngine/Interfaces/AE.h"
+#include "xbmc/cores/AudioEngine/AEFactory.h"
+#include "xbmc/cores/AudioEngine/Utils/AEUtil.h"
 #include "settings/GUISettings.h"
 #include "settings/Settings.h"
+#include "threads/SingleLock.h"
 #include "settings/AdvancedSettings.h"
-#include "MathUtils.h"
+#include "utils/MathUtils.h"
+#include "utils/log.h"
+
+
 
 // typecast AE to CCoreAudioAE
-#define AE (*(CCoreAudioAE*)CAEFactory::AE)
+#define AE (*(CCoreAudioAE*)CAEFactory::GetEngine())
 
 void CheckOutputBufferSize(void **buffer, int *oldSize, int newSize)
 {
@@ -90,20 +90,20 @@ void CCoreAudioAEStream::Upmix(void *input,
 }
 
 CCoreAudioAEStream::CCoreAudioAEStream(enum AEDataFormat dataFormat, unsigned int sampleRate, unsigned int encodedSamplerate, CAEChannelInfo channelLayout, unsigned int options) :
-  m_convertBuffer   (NULL ),
+  m_outputUnit      (NULL ),
   m_valid           (false),
   m_delete          (false),
   m_volume          (1.0f ),
   m_rgain           (1.0f ),
   m_slave           (NULL ),
   m_convertFn       (NULL ),
+  m_Buffer          (NULL ),
+  m_convertBuffer   (NULL ),
   m_ssrc            (NULL ),
   m_draining        (false),
-  m_audioCallback   (NULL ),
   m_AvgBytesPerSec  (0    ),
-  m_Buffer          (NULL ),
+  m_audioCallback   (NULL ),
   m_fadeRunning     (false),
-  m_outputUnit      (NULL ),
   m_frameSize       (0    ),
   m_doRemap         (true ),
   m_firstInput      (true )
@@ -143,12 +143,12 @@ CCoreAudioAEStream::~CCoreAudioAEStream()
 
   InternalFlush();
 
-  _aligned_free(m_convertBuffer);
-  //_aligned_free(m_resampleBuffer);
-  _aligned_free(m_remapBuffer);
-  _aligned_free(m_vizRemapBuffer);
+  _aligned_free(m_convertBuffer); m_convertBuffer = NULL;
+  //_aligned_free(m_resampleBuffer); m_resampleBuffer = NULL;
+  _aligned_free(m_remapBuffer); m_remapBuffer = NULL;
+  _aligned_free(m_vizRemapBuffer); m_vizRemapBuffer = NULL;
 
-  delete m_Buffer;
+  delete m_Buffer; m_Buffer = NULL;
 
   /*
   if (m_resample)
@@ -328,6 +328,7 @@ unsigned int CCoreAudioAEStream::AddData(void *data, unsigned int size)
   unsigned int samples  = size / m_StreamBytesPerSample;
   uint8_t     *adddata  = (uint8_t *)data;
   unsigned int addsize  = size;
+  unsigned int channelsInBuffer = m_chLayoutCountStream;
 
   if (!m_valid || size == 0 || data == NULL || !m_Buffer)
     return 0;
@@ -345,11 +346,11 @@ unsigned int CCoreAudioAEStream::AddData(void *data, unsigned int size)
   // convert the data if we need to
   if (m_convert)
   {
-    CheckOutputBufferSize((void **)&m_convertBuffer, &m_convertBufferSize, frames * m_chLayoutCountStream  * m_OutputBytesPerSample);
+    CheckOutputBufferSize((void **)&m_convertBuffer, &m_convertBufferSize, frames * channelsInBuffer  * m_OutputBytesPerSample);
 
     samples = m_convertFn(adddata, size / m_StreamBytesPerSample, m_convertBuffer);
-    frames  = samples / m_chLayoutCountStream;
-    addsize = frames * m_chLayoutCountStream * m_OutputBytesPerSample;
+    frames  = samples / channelsInBuffer;
+    addsize = frames * channelsInBuffer * m_OutputBytesPerSample;
     adddata = (uint8_t *)m_convertBuffer;
   }
   else
@@ -398,22 +399,23 @@ unsigned int CCoreAudioAEStream::AddData(void *data, unsigned int size)
     // downmix/remap the data
     m_remap.Remap((float *)adddata, (float *)m_remapBuffer, frames);
     adddata = (uint8_t *)m_remapBuffer;
+    channelsInBuffer = m_OutputFormat.m_channelLayout.Count();
   }
 
-  // upmix the ouput to 8 channels
-  if ( (!m_isRaw || m_rawDataFormat == AE_FMT_LPCM) && (m_chLayoutCountOutput > m_chLayoutCountStream) )
+  // upmix the ouput to output channels
+  if ( (!m_isRaw || m_rawDataFormat == AE_FMT_LPCM) && (m_chLayoutCountOutput > channelsInBuffer) )
   {
     frames = addsize / m_StreamFormat.m_frameSize;
 
     CheckOutputBufferSize((void **)&m_upmixBuffer, &m_upmixBufferSize, frames * m_chLayoutCountOutput  * sizeof(float));
-    Upmix(adddata, m_chLayoutCountStream, m_upmixBuffer, m_chLayoutCountOutput, frames, m_OutputFormat.m_dataFormat);
+    Upmix(adddata, channelsInBuffer, m_upmixBuffer, m_chLayoutCountOutput, frames, m_OutputFormat.m_dataFormat);
     adddata = m_upmixBuffer;
     addsize = frames * m_chLayoutCountOutput *  sizeof(float);
   }
 
   unsigned int total_ms_sleep = 0;
   unsigned int room = m_Buffer->GetWriteSize();
-  while (addsize > room && !m_paused && total_ms_sleep < 2000)
+  while (addsize > room && !m_paused && total_ms_sleep < 100)
   {
     // we got deleted
     if (!m_valid || !m_Buffer || m_draining )
@@ -450,11 +452,11 @@ unsigned int CCoreAudioAEStream::GetFrames(uint8_t *buffer, unsigned int size)
   if (!m_isRaw)
   {
     float *floatBuffer   = (float *)buffer;
-    unsigned int samples = readsize / m_OutputBytesPerSample;        
+    unsigned int samples = readsize / m_OutputBytesPerSample;
 
     // we have a frame, if we have a viz we need to hand the data to it.
-    // Keep in mind that our buffer is already in output format. 
-    // So we remap output format to viz format !!!  
+    // Keep in mind that our buffer is already in output format.
+    // So we remap output format to viz format !!!
     if (m_OutputFormat.m_dataFormat == AE_FMT_FLOAT)
     {
       // TODO : Why the hell is vizdata limited ?
@@ -748,7 +750,7 @@ OSStatus CCoreAudioAEStream::OnRender(AudioUnitRenderActionFlags *ioActionFlags,
   if (!m_valid || m_delete || !m_Buffer || m_firstInput || m_paused)
   {
   	for (UInt32 i = 0; i < ioData->mNumberBuffers; i++)
-      bzero(ioData->mBuffers[i].mData, ioData->mBuffers[i].mDataByteSize);	
+      bzero(ioData->mBuffers[i].mData, ioData->mBuffers[i].mDataByteSize);
     if (ioActionFlags)
       *ioActionFlags |= kAudioUnitRenderAction_OutputIsSilence;
     m_firstInput = false;

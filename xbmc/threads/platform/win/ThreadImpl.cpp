@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2011 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,33 +13,16 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include <windows.h>
-#include "utils/Win32Exception.h"
+#include "threads/platform/win/Win32Exception.h"
 
-
-void CThread::Create(bool bAutoDelete, unsigned stacksize)
+void CThread::SpawnThread(unsigned stacksize)
 {
-  if (m_ThreadId != 0)
-  {
-    if (logger) logger->Log(LOGERROR, "%s - fatal error creating thread- old thread id not null", __FUNCTION__);
-    exit(1);
-  }
-
-  m_iLastTime = XbmcThreads::SystemClockMillis() * 10000;
-  m_iLastUsage = 0;
-  m_fLastUsage = 0.0f;
-  m_bAutoDelete = bAutoDelete;
-  m_bStop = false;
-  m_StopEvent.Reset();
-  m_TermEvent.Reset();
-  m_StartEvent.Reset();
-
   // Create in the suspended state, so that no matter the thread priorities and scheduled order, the handle will be assigned
   // before the new thread exits.
   m_ThreadOpaque.handle = CreateThread(NULL, stacksize, (LPTHREAD_START_ROUTINE)&staticThread, this, CREATE_SUSPENDED, &m_ThreadId);
@@ -86,6 +69,8 @@ void CThread::SetThreadInfo()
   __except(EXCEPTION_EXECUTE_HANDLER)
   {
   }
+
+    win32_exception::install_handler();
 }
 
 ThreadIdentifier CThread::GetCurrentThreadId()
@@ -152,8 +137,8 @@ bool CThread::WaitForThreadExit(unsigned int milliseconds)
   {
     // boost priority of thread we are waiting on to same as caller
     int callee = GetThreadPriority(m_ThreadOpaque.handle);
-    int caller = GetThreadPriority(GetCurrentThread());
-    if(caller > callee)
+    int caller = GetThreadPriority(::GetCurrentThread());
+    if(caller != THREAD_PRIORITY_ERROR_RETURN && caller > callee)
       SetThreadPriority(m_ThreadOpaque.handle, caller);
 
     lock.Leave();
@@ -161,7 +146,7 @@ bool CThread::WaitForThreadExit(unsigned int milliseconds)
     lock.Enter();
 
     // restore thread priority if thread hasn't exited
-    if(caller > callee && m_ThreadOpaque.handle)
+    if(callee != THREAD_PRIORITY_ERROR_RETURN && caller > callee && m_ThreadOpaque.handle)
       SetThreadPriority(m_ThreadOpaque.handle, callee);
   }
   return bReturn;
@@ -203,51 +188,8 @@ float CThread::GetRelativeUsage()
   return m_fLastUsage;
 }
 
-void CThread::Action()
+void CThread::SetSignalHandlers()
 {
   // install win32 exception translator
   win32_exception::install_handler();
-
-  try
-  {
-    OnStartup();
-  }
-  catch (const access_violation &e)
-  {
-    e.writelog(__FUNCTION__" thread startup");
-    if (IsAutoDelete())
-      return;
-  }
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__" thread startup");
-    if (IsAutoDelete())
-      return;
-  }
-
-  try
-  {
-    Process();
-  }
-  catch (const access_violation &e)
-  {
-    e.writelog(__FUNCTION__" thread process");
-  }
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__" thread process");
-  }
-
-  try
-  {
-    OnExit();
-  }
-  catch (const access_violation &e)
-  {
-    e.writelog(__FUNCTION__" thread exit");
-  }
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__" thread exit");
-  }
 }

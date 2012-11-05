@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -25,17 +24,17 @@
 
 #include "AEFactory.h"
 #include "AEAudioFormat.h"
-#include "AEConvert.h"
-#include "AERemap.h"
-#include "AEUtil.h"
 #include "CoreAudioAE.h"
 #include "Interfaces/AESound.h"
 #include "threads/SingleLock.h"
+#include "cores/AudioEngine/Utils/AEConvert.h"
+#include "cores/AudioEngine/Utils/AERemap.h"
+#include "cores/AudioEngine/Utils/AEUtil.h"
 #include "utils/log.h"
 #include "utils/EndianSwap.h"
 
 /* typecast AE to CCoreAudioAE */
-#define AE (*(CCoreAudioAE*)CAEFactory::AE)
+#define AE (*(CCoreAudioAE*)CAEFactory::GetEngine())
 
 CCoreAudioAESound::CCoreAudioAESound(const std::string &filename) :
   IAESound         (filename),
@@ -43,6 +42,7 @@ CCoreAudioAESound::CCoreAudioAESound(const std::string &filename) :
   m_volume         (1.0f    ),
   m_inUse          (0       )
 {
+  m_wavLoader.Load(filename);
 }
 
 CCoreAudioAESound::~CCoreAudioAESound()
@@ -58,17 +58,18 @@ std::string CCoreAudioAESound::GetFileName()
 
 void CCoreAudioAESound::DeInitialize()
 {
-  m_wavLoader.DeInitialize();
 }
 
 bool CCoreAudioAESound::Initialize()
 {
-  DeInitialize();
-
-  if (!m_wavLoader.Initialize(m_filename, AE.GetSampleRate()))
+  if (!m_wavLoader.IsValid())
     return false;
 
-  return m_wavLoader.Remap(AE.GetChannelLayout());
+  return m_wavLoader.Initialize(
+    AE.GetSampleRate   (),
+    AE.GetChannelLayout(),
+    AE_CH_LAYOUT_INVALID
+  );
 }
 
 void CCoreAudioAESound::SetVolume(float volume)
@@ -102,8 +103,8 @@ float* CCoreAudioAESound::GetSamples()
 void CCoreAudioAESound::ReleaseSamples()
 {
   CSingleLock cs(m_critSection);
-  ASSERT(m_inUse > 0);
-  --m_inUse;
+  if(m_inUse > 0)
+    --m_inUse;
 }
 
 bool CCoreAudioAESound::IsPlaying()

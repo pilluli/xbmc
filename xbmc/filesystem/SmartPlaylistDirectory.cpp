@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,11 +13,12 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
+
+#include <math.h>
 
 #include "SmartPlaylistDirectory.h"
 #include "utils/log.h"
@@ -27,7 +28,10 @@
 #include "Directory.h"
 #include "File.h"
 #include "FileItem.h"
+#include "settings/GUISettings.h"
 #include "utils/URIUtils.h"
+
+#define PROPERTY_PATH_DB            "path.db"
 
 namespace XFILE
 {
@@ -45,132 +49,205 @@ namespace XFILE
     CSmartPlaylist playlist;
     if (!playlist.Load(strPath))
       return false;
-    return GetDirectory(playlist, items);
+    bool result = GetDirectory(playlist, items);
+    if (result)
+      items.SetProperty("library.smartplaylist", true);
+    
+    return result;
   }
   
-  bool CSmartPlaylistDirectory::GetDirectory(const CSmartPlaylist &playlist, CFileItemList& items)
+  bool CSmartPlaylistDirectory::GetDirectory(const CSmartPlaylist &playlist, CFileItemList& items, const CStdString &strBaseDir /* = "" */, bool filter /* = false */)
   {
     bool success = false, success2 = false;
     std::set<CStdString> playlists;
-    if (playlist.GetType().Equals("tvshows"))
+
+    SortDescription sorting;
+    sorting.limitEnd = playlist.GetLimit();
+    sorting.sortBy = playlist.GetOrder();
+    sorting.sortOrder = playlist.GetOrderAscending() ? SortOrderAscending : SortOrderDescending;
+    if (g_guiSettings.GetBool("filelists.ignorethewhensorting"))
+      sorting.sortAttributes = SortAttributeIgnoreArticle;
+
+    std::string option = !filter ? "xsp" : "filter";
+
+    if (playlist.GetType().Equals("movies") ||
+        playlist.GetType().Equals("tvshows") ||
+        playlist.GetType().Equals("episodes"))
     {
       CVideoDatabase db;
-      db.Open();
-      CVideoDatabase::Filter filter;
-      filter.where = playlist.GetWhereClause(db, playlists);
-      filter.order = playlist.GetOrderClause(db);
-      filter.limit = playlist.GetLimitClause();
-      success = db.GetTvShowsByWhere("videodb://2/2/", filter, items);
-      items.SetContent("tvshows");
-      db.Close();
-    }
-    else if (playlist.GetType().Equals("episodes"))
-    {
-      CVideoDatabase db;
-      db.Open();
-      CVideoDatabase::Filter filter;
-      filter.where = playlist.GetWhereClause(db, playlists);
-      filter.order = playlist.GetOrderClause(db);
-      filter.limit = playlist.GetLimitClause();
-      success = db.GetEpisodesByWhere("videodb://2/2/", filter, items);
-      items.SetContent("episodes");
-      db.Close();
-    }
-    else if (playlist.GetType().Equals("movies"))
-    {
-      CVideoDatabase db;
-      db.Open();
-      CVideoDatabase::Filter filter;
-      filter.where = playlist.GetWhereClause(db, playlists);
-      filter.order = playlist.GetOrderClause(db);
-      filter.limit = playlist.GetLimitClause();
-      success = db.GetMoviesByWhere("videodb://1/2/", filter, items, true);
-      items.SetContent("movies");
-      db.Close();
+      if (db.Open())
+      {
+        MediaType mediaType = DatabaseUtils::MediaTypeFromString(playlist.GetType());
+
+        CStdString baseDir = strBaseDir;
+        if (strBaseDir.empty())
+        {
+          switch (mediaType)
+          {
+          case MediaTypeTvShow:
+          case MediaTypeEpisode:
+            baseDir = "videodb://2/2/";
+            break;
+
+          case MediaTypeMovie:
+            baseDir = "videodb://1/2/";
+            break;
+
+          default:
+            return false;
+          }
+        }
+
+        CVideoDbUrl videoUrl;
+        if (!videoUrl.FromString(baseDir))
+          return false;
+
+        // store the smartplaylist as JSON in the URL as well
+        CStdString xsp;
+        if (!playlist.IsEmpty(filter))
+        {
+          if (!playlist.SaveAsJson(xsp, !filter))
+            return false;
+        }
+        videoUrl.AddOption(option, xsp);
+        
+        CDatabase::Filter dbfilter;
+        success = db.GetSortedVideos(mediaType, videoUrl.ToString(), sorting, items, dbfilter, true);
+        db.Close();
+
+        // if we retrieve a list of episodes and we didn't receive
+        // a pre-defined base path, we need to fix it
+        if (strBaseDir.empty() && mediaType == MediaTypeEpisode)
+          videoUrl.AppendPath("-1/-1/");
+        items.SetProperty(PROPERTY_PATH_DB, videoUrl.ToString());
+      }
     }
     else if (playlist.GetType().Equals("albums"))
     {
       CMusicDatabase db;
-      db.Open();
-      CStdString whereClause = playlist.GetWhereClause(db, playlists);
-      CStdString orderClause = playlist.GetOrderClause(db);
-      CStdString limitClause = playlist.GetLimitClause();
-      if (!whereClause.empty())
-        whereClause = "WHERE " + whereClause;
-      if (!orderClause.empty())
-        orderClause = "ORDER BY " + orderClause;
-      if (!limitClause.empty())
-        orderClause += " LIMIT " + limitClause;
+      if (db.Open())
+      {
+        CMusicDbUrl musicUrl;
+        if (!musicUrl.FromString(!strBaseDir.empty() ? strBaseDir : "musicdb://3/"))
+          return false;
 
-      success = db.GetAlbumsByWhere("musicdb://3/", whereClause, orderClause, items);
-      items.SetContent("albums");
-      db.Close();
+        // store the smartplaylist as JSON in the URL as well
+        CStdString xsp;
+        if (!playlist.IsEmpty(filter))
+        {
+          if (!playlist.SaveAsJson(xsp, !filter))
+            return false;
+        }
+        musicUrl.AddOption(option, xsp);
+
+        CDatabase::Filter dbfilter;
+        success = db.GetAlbumsByWhere(musicUrl.ToString(), dbfilter, items, sorting);
+        db.Close();
+        items.SetContent("albums");
+        items.SetProperty(PROPERTY_PATH_DB, musicUrl.ToString());
+      }
     }
+    else if (playlist.GetType().Equals("artists"))
+    {
+      CMusicDatabase db;
+      if (db.Open())
+      {
+        CMusicDbUrl musicUrl;
+        if (!musicUrl.FromString("musicdb://2/"))
+          return false;
+
+        // store the smartplaylist as JSON in the URL as well
+        CStdString xsp;
+        if (!playlist.IsEmpty(filter))
+        {
+          if (!playlist.SaveAsJson(xsp, !filter))
+            return false;
+        }
+        musicUrl.AddOption(option, xsp);
+
+        CDatabase::Filter dbfilter;
+        success = db.GetArtistsNav(musicUrl.ToString(), items, !g_guiSettings.GetBool("musiclibrary.showcompilationartists"), -1, -1, -1, dbfilter, sorting);
+        db.Close();
+        items.SetContent("artists");
+        items.SetProperty(PROPERTY_PATH_DB, musicUrl.ToString());
+      }
+    }
+
     if (playlist.GetType().Equals("songs") || playlist.GetType().Equals("mixed") || playlist.GetType().IsEmpty())
     {
       CMusicDatabase db;
-      db.Open();
-      CStdString whereOrder, whereClause, orderClause, limitClause;
-      if (playlist.GetType().IsEmpty() || playlist.GetType().Equals("mixed"))
+      if (db.Open())
       {
         CSmartPlaylist songPlaylist(playlist);
-        songPlaylist.SetType("songs");
-        whereClause = songPlaylist.GetWhereClause(db, playlists);
-        orderClause = songPlaylist.GetOrderClause(db);
-        limitClause = songPlaylist.GetLimitClause();
-      }
-      else
-      {
-        whereClause = playlist.GetWhereClause(db, playlists);
-        orderClause = playlist.GetOrderClause(db);
-        limitClause = playlist.GetLimitClause();
-      }
+        if (playlist.GetType().IsEmpty() || playlist.GetType().Equals("mixed"))
+          songPlaylist.SetType("songs");
+        
+        CMusicDbUrl musicUrl;
+        if (!musicUrl.FromString(!strBaseDir.empty() ? strBaseDir : "musicdb://4/"))
+          return false;
 
-      if (!whereClause.empty())
-        whereOrder = "WHERE " + whereClause;
-      if (!orderClause.empty())
-        whereOrder += " ORDER BY " + orderClause;
-      if (!limitClause.empty())
-        whereOrder += " LIMIT " + limitClause;
+        // store the smartplaylist as JSON in the URL as well
+        CStdString xsp;
+        if (!songPlaylist.IsEmpty(filter))
+        {
+          if (!songPlaylist.SaveAsJson(xsp, !filter))
+            return false;
+        }
+        musicUrl.AddOption(option, xsp);
 
-      success = db.GetSongsByWhere("", whereOrder, items);
-      items.SetContent("songs");
-      db.Close();
+        CDatabase::Filter dbfilter;
+        success = db.GetSongsByWhere(musicUrl.ToString(), dbfilter, items, sorting);
+        db.Close();
+        items.SetContent("songs");
+        items.SetProperty(PROPERTY_PATH_DB, musicUrl.ToString());
+      }
     }
     if (playlist.GetType().Equals("musicvideos") || playlist.GetType().Equals("mixed"))
     {
       CVideoDatabase db;
-      db.Open();
-      CVideoDatabase::Filter filter;
-      if (playlist.GetType().Equals("mixed"))
+      if (db.Open())
       {
         CSmartPlaylist mvidPlaylist(playlist);
-        mvidPlaylist.SetType("musicvideos");
-        filter.where = mvidPlaylist.GetWhereClause(db, playlists);
-        filter.order = mvidPlaylist.GetOrderClause(db);
-        filter.limit = mvidPlaylist.GetLimitClause();
-      }
-      else
-      {
-        filter.where = playlist.GetWhereClause(db, playlists);
-        filter.order = playlist.GetOrderClause(db);
-        filter.limit = playlist.GetLimitClause();
-      }
+        if (playlist.GetType().Equals("mixed"))
+          mvidPlaylist.SetType("musicvideos");
 
-      CFileItemList items2;
-      success2 = db.GetMusicVideosByWhere("videodb://3/2/", filter, items2, false); // TODO: SMARTPLAYLISTS Don't check locks???
-      db.Close();
-      items.Append(items2);
-      if (items2.Size())
-        items.SetContent("musicvideos");
+        CVideoDbUrl videoUrl;
+        if (!videoUrl.FromString(!strBaseDir.empty() ? strBaseDir : "videodb://3/2/"))
+          return false;
+
+        // store the smartplaylist as JSON in the URL as well
+        CStdString xsp;
+        if (!mvidPlaylist.IsEmpty(filter))
+        {
+          if (!mvidPlaylist.SaveAsJson(xsp, !filter))
+            return false;
+        }
+        videoUrl.AddOption(option, xsp);
+        
+        CFileItemList items2;
+        success2 = db.GetSortedVideos(MediaTypeMusicVideo, videoUrl.ToString(), sorting, items2);
+        db.Close();
+
+        items.Append(items2);
+        if (items2.Size())
+        {
+          if (items.Size() > items2.Size())
+            items.SetContent("mixed");
+          else
+            items.SetContent("musicvideos");
+        }
+        items.SetProperty(PROPERTY_PATH_DB, videoUrl.ToString());
+      }
     }
     items.SetLabel(playlist.GetName());
+
     // go through and set the playlist order
     for (int i = 0; i < items.Size(); i++)
     {
       CFileItemPtr item = items[i];
       item->m_iprogramCount = i;  // hack for playlist order
     }
+
     if (playlist.GetType().Equals("mixed"))
       return success || success2;
     else if (playlist.GetType().Equals("musicvideos"))

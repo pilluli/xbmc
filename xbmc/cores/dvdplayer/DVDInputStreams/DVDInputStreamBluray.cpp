@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2009 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 #include "system.h"
@@ -32,6 +31,7 @@
 #include "filesystem/File.h"
 #include "filesystem/Directory.h"
 #include "DllLibbluray.h"
+#include "URL.h"
 
 #define LIBBLURAY_BYTESEEK 0
 
@@ -58,10 +58,10 @@ void DllLibbluray::file_close(BD_FILE_H *file)
 {
   if (file)
   {
+    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray - Closed file (%p)\n", file);
+    
     delete static_cast<CFile*>(file->internal);
     delete file;
-
-    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray - Closed file (%p)\n", file);
   }
 }
 
@@ -124,10 +124,10 @@ BD_FILE_H * DllLibbluray::file_open(const char* filename, const char *mode)
       return file;
     }
 
+    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray - Error opening file! (%p)", file);
+    
     delete fp;
     delete file;
-
-    CLog::Log(LOGDEBUG, "CDVDInputStreamBluray - Error opening file! (%p)", file);
 
     return NULL;
 }
@@ -220,6 +220,10 @@ CDVDInputStreamBluray::CDVDInputStreamBluray(IDVDPlayer* player) :
   }
   m_content = "video/x-mpegts";
   m_player  = player;
+  m_title_playing = false;
+  m_navmode = false;
+  m_hold = HOLD_NONE;
+  memset(&m_event, 0, sizeof(m_event));
 }
 
 CDVDInputStreamBluray::~CDVDInputStreamBluray()
@@ -640,7 +644,7 @@ void CDVDInputStreamBluray::OverlayCallback(const BD_OVERLAY * const ov)
     return;
   }
 
-  group->iPTSStartTime = ov->pts;
+  group->iPTSStartTime = (double) ov->pts;
   group->iPTSStopTime  = 0;
 
   if (ov->plane > 1)

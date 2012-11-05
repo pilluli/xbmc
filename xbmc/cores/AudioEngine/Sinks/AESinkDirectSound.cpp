@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -35,6 +34,7 @@
 #include <mmdeviceapi.h>
 #include <Functiondiscoverykeys_devpkey.h>
 #include <Rpc.h>
+#include "cores/AudioEngine/Utils/AEUtil.h"
 #pragma comment(lib, "Rpcrt4.lib")
 
 extern HWND g_hWnd;
@@ -88,12 +88,21 @@ static const winEndpointsToAEDeviceType winEndpoints[EndpointFormFactor_enum_cou
   {"Unknown - ",                AE_DEVTYPE_PCM},
 };
 
+// implemented in AESinkWASAPI.cpp
+extern CStdStringA localWideToUtf(LPCWSTR wstr);
+
 static BOOL CALLBACK DSEnumCallback(LPGUID lpGuid, LPCTSTR lpcstrDescription, LPCTSTR lpcstrModule, LPVOID lpContext)
 {
   DSDevice dev;
   std::list<DSDevice> &enumerator = *static_cast<std::list<DSDevice>*>(lpContext);
 
-  dev.name = std::string(lpcstrDescription);
+  int bufSize = MultiByteToWideChar(CP_ACP, 0, lpcstrDescription, -1, NULL, 0);
+  CStdStringW strW (L"", bufSize);
+  if ( bufSize == 0 || MultiByteToWideChar(CP_ACP, 0, lpcstrDescription, -1, strW.GetBuf(bufSize), bufSize) != bufSize )
+    strW.clear();
+  strW.RelBuf();
+
+  dev.name = localWideToUtf(strW);
 
   dev.lpGuid = lpGuid;
 
@@ -129,7 +138,7 @@ bool CAESinkDirectSound::Initialize(AEAudioFormat &format, std::string &device)
 
   LPGUID deviceGUID = NULL;
   RPC_CSTR wszUuid  = NULL;
-  HRESULT hr;
+  HRESULT hr = E_FAIL;
   std::list<DSDevice> DSDeviceList;
   std::string deviceFriendlyName;
   DirectSoundEnumerate(DSEnumCallback, &DSDeviceList);
@@ -151,7 +160,7 @@ bool CAESinkDirectSound::Initialize(AEAudioFormat &format, std::string &device)
   if (hr == RPC_S_OK) RpcStringFree(&wszUuid);
   }
 
- hr = DirectSoundCreate(deviceGUID, &m_pDSound, NULL);
+  hr = DirectSoundCreate(deviceGUID, &m_pDSound, NULL);
 
   if (FAILED(hr))
   {
@@ -354,7 +363,7 @@ bool CAESinkDirectSound::IsCompatible(const AEAudioFormat format, const std::str
   return false;
 }
 
-unsigned int CAESinkDirectSound::AddPackets(uint8_t *data, unsigned int frames)
+unsigned int CAESinkDirectSound::AddPackets(uint8_t *data, unsigned int frames, bool hasAudio)
 {
   if (!m_initialized)
     return 0;
@@ -458,7 +467,6 @@ double CAESinkDirectSound::GetCacheTotal()
 void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
 {
   CAEDeviceInfo        deviceInfo;
-  OSVERSIONINFO        osvi;
 
   IMMDeviceEnumerator* pEnumerator = NULL;
   IMMDeviceCollection* pEnumDevices = NULL;
@@ -467,12 +475,7 @@ void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
   HRESULT                hr;
 
   /* See if we are on Windows XP */
-  ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
-  osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-
-  GetVersionEx(&osvi);
-
-  if (osvi.dwMajorVersion == 5)
+  if (!g_sysinfo.IsVistaOrHigher())
   {
     /* We are on XP - WASAPI not supported - enumerate using DS devices */
     LPGUID deviceGUID = NULL;
@@ -558,9 +561,7 @@ void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
       goto failed;
     }
 
-    std::wstring strRawFriendlyName(varName.pwszVal);
-    std::string strFriendlyName = std::string(strRawFriendlyName.begin(), strRawFriendlyName.end());
-
+    std::string strFriendlyName = localWideToUtf(varName.pwszVal);
     PropVariantClear(&varName);
 
     hr = pProperty->GetValue(PKEY_AudioEndpoint_GUID, &varName);
@@ -572,8 +573,7 @@ void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
       goto failed;
     }
 
-    std::wstring strRawDevName(varName.pwszVal);
-    std::string strDevName = std::string(strRawDevName.begin(), strRawDevName.end());
+    std::string strDevName = localWideToUtf(varName.pwszVal);
     PropVariantClear(&varName);
 
     hr = pProperty->GetValue(PKEY_AudioEndpoint_FormFactor, &varName);
@@ -593,13 +593,14 @@ void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
     IAudioClient *pClient;
     hr = pDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&pClient);
     if (FAILED(hr))
-      {
-        CLog::Log(LOGERROR, __FUNCTION__": Activate device failed (%s)", WASAPIErrToStr(hr));
-      }
+    {
+      CLog::Log(LOGERROR, __FUNCTION__": Activate device failed (%s)", WASAPIErrToStr(hr));
+      goto failed;
+    }
 
     //hr = pClient->GetMixFormat(&pwfxex);
     hr = pProperty->GetValue(PKEY_AudioEngine_DeviceFormat, &varName);
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr) && varName.blob.cbSize > 0)
     {
       WAVEFORMATEX* smpwfxex = (WAVEFORMATEX*)varName.blob.pBlobData;
       deviceInfo.m_channels = layoutsByChCount[std::min(smpwfxex->nChannels, (WORD) 2)];
@@ -609,7 +610,7 @@ void CAESinkDirectSound::EnumerateDevicesEx(AEDeviceInfoList &deviceInfoList)
     }
     else
     {
-      CLog::Log(LOGERROR, __FUNCTION__": GetMixFormat failed (%s)", WASAPIErrToStr(hr));
+      CLog::Log(LOGERROR, __FUNCTION__": Getting DeviceFormat failed (%s)", WASAPIErrToStr(hr));
     }
     pClient->Release();
 
@@ -649,8 +650,9 @@ void CAESinkDirectSound::CheckPlayStatus()
   if (!(status & DSBSTATUS_PLAYING) && m_CacheLen != 0) // If we have some data, see if we can start playback
   {
     HRESULT hr = m_pBuffer->Play(0, 0, DSBPLAY_LOOPING);
-    dserr2str(hr);
     CLog::Log(LOGDEBUG,__FUNCTION__ ": Resuming Playback");
+    if (FAILED(hr))
+      CLog::Log(LOGERROR, __FUNCTION__": Failed to play the DirectSound buffer: %s", dserr2str(hr));
   }
 }
 

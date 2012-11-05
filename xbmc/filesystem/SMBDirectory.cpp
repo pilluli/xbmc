@@ -1,6 +1,6 @@
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -47,7 +46,7 @@
 
 #include <libsmbclient.h>
 
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
 #define XBMC_SMB_MOUNT_PATH "Library/Application Support/XBMC/Mounts/"
 #else
 #define XBMC_SMB_MOUNT_PATH "/media/xbmc/smb/"
@@ -408,7 +407,7 @@ CStdString CSMBDirectory::MountShare(const CStdString &smbPath, const CStdString
 
   CStdString strMountPoint = GetMountPoint(strType, strName);
 
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
   // Create the directory.
   CURL::Decode(strMountPoint);
   CreateDirectory(strMountPoint, NULL);
@@ -458,7 +457,7 @@ CStdString CSMBDirectory::MountShare(const CStdString &smbPath, const CStdString
 
 void CSMBDirectory::UnMountShare(const CStdString &strType, const CStdString &strName)
 {
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
   // Decode the path.
   CStdString strMountPoint = GetMountPoint(strType, strName);
   CURL::Decode(strMountPoint);
@@ -481,7 +480,7 @@ CStdString CSMBDirectory::GetMountPoint(const CStdString &strType, const CStdStr
   CStdString strPath = strType + strName;
   CURL::Encode(strPath);
 
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
   CStdString str = getenv("HOME");
   return str + "/" + XBMC_SMB_MOUNT_PATH + strPath;
 #else

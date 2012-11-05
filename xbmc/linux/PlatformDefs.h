@@ -2,7 +2,7 @@
 #define __PLATFORM_DEFS_H__
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -16,9 +16,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -41,7 +40,11 @@
 #include <string.h>
 #if defined(TARGET_DARWIN)
 #include <stdio.h>
-#define __STDC_FORMAT_MACROS
+#include <sched.h>
+#include <AvailabilityMacros.h>
+#ifndef __STDC_FORMAT_MACROS
+  #define __STDC_FORMAT_MACROS
+#endif
 #include <inttypes.h>
 #include <sys/sysctl.h>
 #include <mach/mach.h>
@@ -170,7 +173,7 @@
 #define CALLBACK    __stdcall
 #define WINAPI      __stdcall
 #define WINAPIV     __cdecl
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#if !defined(TARGET_DARWIN) && !defined(__FreeBSD__)
 #define APIENTRY    WINAPI
 #else
 #define APIENTRY
@@ -352,30 +355,15 @@ typedef int (*LPTHREAD_START_ROUTINE)(void *);
 #define _O_TRUNC O_TRUNC
 #define _O_RDONLY O_RDONLY
 #define _O_WRONLY O_WRONLY
-#define _off_t off_t
 
-#if defined(__APPLE__)
-  #include <sched.h>
-  #include <AvailabilityMacros.h>
-  typedef int64_t   off64_t;
-  typedef off_t     __off_t;
-  typedef off64_t   __off64_t;
-  typedef fpos_t fpos64_t;
-  #define __stat64 stat
+#if defined(TARGET_DARWIN) || defined(TARGET_FREEBSD)
   #define stat64 stat
-  #if defined(TARGET_DARWIN_IOS)
+  #define __stat64 stat
+  #define fstat64 fstat
+  typedef int64_t off64_t;
+  #if defined(TARGET_DARWIN_IOS) || defined(TARGET_FREEBSD)
     #define statfs64 statfs
   #endif
-  #define fstat64 fstat
-#elif defined(__FreeBSD__)
-  typedef int64_t   off64_t;
-  typedef off_t     __off_t;
-  typedef off64_t   __off64_t;
-  typedef fpos_t fpos64_t;
-  #define __stat64 stat
-  #define stat64 stat
-  #define statfs64 statfs
-  #define fstat64 fstat
 #else
   #define __stat64 stat64
 #endif

@@ -1,4 +1,4 @@
-<window id="11">
+<window>
 	<defaultcontrol>8</defaultcontrol>
 	<controls>
 		<control type="videowindow" id="20">
@@ -11,7 +11,7 @@
 		</control>
 		<control type="group">
 			<visible>!Player.HasVideo</visible>
-			<include>CommonSettingsBackground</include>
+			<include>CommonBackground</include>
 		</control>
 		<control type="image">
 			<description>Overlay</description>

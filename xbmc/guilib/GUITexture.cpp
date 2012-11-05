@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -130,7 +129,7 @@ bool CGUITextureBase::AllocateOnDemand()
 {
   if (m_visible)
   { // visible, so make sure we're allocated
-    if (!IsAllocated() || (m_isAllocated == IN_PROGRESS))
+    if (!IsAllocated() || (m_isAllocated == LARGE && !m_texture.size()))
       return AllocResources();
   }
   else
@@ -315,13 +314,13 @@ bool CGUITextureBase::AllocResources()
       CTextureArray texture;
       if (g_largeTextureManager.GetImage(m_info.filename, texture, !IsAllocated()))
       {
-        m_isAllocated = IN_PROGRESS;
+        m_isAllocated = LARGE;
 
         if (!texture.size()) // not ready as yet
           return false;
 
-        m_isAllocated = LARGE;
         m_texture = texture;
+
         changed = true;
       }
       else
@@ -456,9 +455,7 @@ bool CGUITextureBase::CalculateSize()
 
 void CGUITextureBase::FreeResources(bool immediately /* = false */)
 {
-  if (m_isAllocated == IN_PROGRESS)
-    g_largeTextureManager.ReleaseQueuedImage(m_info.filename);
-  else if (m_isAllocated == LARGE || m_isAllocated == LARGE_FAILED)
+  if (m_isAllocated == LARGE || m_isAllocated == LARGE_FAILED)
     g_largeTextureManager.ReleaseImage(m_info.filename, immediately || (m_isAllocated == LARGE_FAILED));
   else if (m_isAllocated == NORMAL && m_texture.size())
     g_TextureManager.ReleaseTexture(m_info.filename);

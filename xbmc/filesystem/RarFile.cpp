@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -226,6 +225,14 @@ bool CRarFile::Open(const CURL& url)
 bool CRarFile::Exists(const CURL& url)
 {
   InitFromUrl(url);
+  
+  // First step:
+  // Make sure that the archive exists in the filesystem.
+  if (!CFile::Exists(m_strRarPath, false)) 
+    return false;
+
+  // Second step:
+  // Make sure that the requested file exists in the archive.
   bool bResult;
 
   if (!g_RarManager.IsFileInRar(bResult, m_strRarPath, m_strPathInRar))
@@ -689,7 +696,7 @@ bool CRarFile::OpenInArchive()
       {
         CStdString strFileName;
 
-        if (m_pArc->NewLhd.FileNameW && wcslen(m_pArc->NewLhd.FileNameW) > 0)
+        if (wcslen(m_pArc->NewLhd.FileNameW) > 0)
         {
           g_charsetConverter.wToUTF8(m_pArc->NewLhd.FileNameW, strFileName);
         }

@@ -3,7 +3,7 @@
 #include <unistd.h>
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -17,15 +17,14 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include "XMemUtils.h"
 
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
 #include <mach/mach.h>
 #endif
 
@@ -55,7 +54,7 @@ void _aligned_free(void *p) {
 
 #ifndef _WIN32
 
-#if defined(_LINUX) && !defined(__APPLE__) && !defined(__FreeBSD__)
+#if defined(_LINUX) && !defined(TARGET_DARWIN) && !defined(__FreeBSD__)
 static FILE* procMeminfoFP = NULL;
 #endif
 
@@ -67,7 +66,7 @@ void GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer)
   memset(lpBuffer, 0, sizeof(MEMORYSTATUSEX));
   lpBuffer->dwLength = sizeof(MEMORYSTATUSEX);
 
-#ifdef __APPLE__
+#if defined(TARGET_DARWIN)
   uint64_t physmem;
   size_t len = sizeof physmem;
   int mib[2] = { CTL_HW, HW_MEMSIZE };

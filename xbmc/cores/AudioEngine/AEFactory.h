@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -31,14 +30,35 @@ enum AEEngine
   AE_ENGINE_PULSE
 };
 
-class IAE;
 class CAEFactory
 {
 public:
-  static IAE *AE;
+  static IAE *GetEngine();
   static bool LoadEngine();
+  static void UnLoadEngine();
   static bool StartEngine();
+  static bool Suspend(); /** Suspends output and de-initializes output sink - used for external players or power saving */
+  static bool Resume(); /** Resumes output after Suspend - re-initializes sink */
+  static bool IsSuspended(); /** Returns true if output has been suspended */
+  /* wrap engine interface */
+  static IAESound *MakeSound(const std::string &file);
+  static void FreeSound(IAESound *sound);
+  static void SetSoundMode(const int mode);
+  static void OnSettingsChange(std::string setting);
+  static void EnumerateOutputDevices(AEDeviceList &devices, bool passthrough);
+  static std::string GetDefaultDevice(bool passthrough);
+  static bool SupportsRaw();
+  static void SetMute(const bool enabled);
+  static bool IsMuted();
+  static float GetVolume();
+  static void SetVolume(const float volume);
+  static void Shutdown();
+  static IAEStream *MakeStream(enum AEDataFormat dataFormat, unsigned int sampleRate, 
+    unsigned int encodedSampleRate, CAEChannelInfo channelLayout, unsigned int options = 0);
+  static IAEStream *FreeStream(IAEStream *stream);
+  static void GarbageCollect();
 private:
   static bool LoadEngine(enum AEEngine engine);
+  static IAE *AE;
 };
 

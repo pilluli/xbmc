@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -59,8 +58,9 @@ public:
   virtual unsigned int AddData(void *data, unsigned int size) = 0;
 
   /**
-   * Returns how long until new data will be played
-   * @return The delay in seconds
+   * Returns the time in seconds that it will take
+   * for the next added packet to be heard from the speakers.
+   * @return seconds
    */
   virtual double GetDelay() = 0;
 
@@ -71,14 +71,15 @@ public:
   virtual bool IsBuffering() = 0;
 
   /**
-   * Returns how long until playback will start
-   * @return The delay in seconds
+   * Returns the time in seconds that it will take
+   * to underrun the cache if no sample is added.
+   * @return seconds
    */
   virtual double GetCacheTime() = 0;
 
   /**
-   * Returns the total length of the cache before playback will start
-   * @return The delay in seconds
+   * Returns the total time in seconds of the cache
+   * @return seconds
    */
   virtual double GetCacheTotal() = 0;
 
@@ -106,7 +107,7 @@ public:
   /**
    * Returns true if the is stream has finished draining
    */
-  virtual bool IsDrained() { return true; } /*FIXME: this should = 0 when done */
+  virtual bool IsDrained() = 0;
   
   /**
    * Flush all buffers dropping the audio data

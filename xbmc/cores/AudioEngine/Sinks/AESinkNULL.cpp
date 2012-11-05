@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -81,7 +80,7 @@ double CAESinkNULL::GetDelay()
   return std::max(0.0, (double)(m_ts - CurrentHostCounter()) / 1000000.0f);
 }
 
-unsigned int CAESinkNULL::AddPackets(uint8_t *data, unsigned int frames)
+unsigned int CAESinkNULL::AddPackets(uint8_t *data, unsigned int frames, bool hasAudio)
 {
   float timeout = m_msPerFrame * frames;
   m_ts = CurrentHostCounter() + MathUtils::round_int(timeout * 1000000.0f);

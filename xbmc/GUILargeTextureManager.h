@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -15,9 +15,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -93,14 +92,13 @@ public:
 
    When textures are finished with, this function should be called.  This decrements the texture's
    reference count, and schedules it to be unloaded once the reference count reaches zero.  If the
-   texture is still queued for loading, or is in the process of loading, use ReleaseQueuedImage instead
+   texture is still queued for loading, or is in the process of loading, the image load is cancelled.
 
    \param path path of the image to release.
    \param immediately if set true the image is immediately unloaded once its reference count reaches zero
                       rather than being unloaded after a delay.
    */
   void ReleaseImage(const CStdString &path, bool immediately = false);
-  void ReleaseQueuedImage(const CStdString &path);
 
   /*!
    \brief Cleanup images that are no longer in use.

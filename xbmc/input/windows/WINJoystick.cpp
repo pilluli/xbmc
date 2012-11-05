@@ -13,9 +13,8 @@
 *  GNU General Public License for more details.
 *
 *  You should have received a copy of the GNU General Public License
-*  along with XBMC; see the file COPYING.  If not, write to
-*  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
-*  http://www.gnu.org/copyleft/gpl.html
+*  along with XBMC; see the file COPYING.  If not, see
+*  <http://www.gnu.org/licenses/>.
 *
 */
 
@@ -30,8 +29,6 @@
 #include <dinputd.h>
 
 using namespace std;
-
-CJoystick g_Joystick; // global
 
 extern HWND g_hWnd;
 
@@ -53,7 +50,9 @@ extern HWND g_hWnd;
 
 CJoystick::CJoystick()
 {
-  Reset();
+  CSingleLock lock(m_critSection);
+  Reset(true);
+  m_joystickEnabled = false;
   m_NumAxes = 0;
   m_AxisId = 0;
   m_JoyId = 0;
@@ -61,8 +60,6 @@ CJoystick::CJoystick()
   m_HatId = 0;
   m_HatState = SDL_HAT_CENTERED;
   m_ActiveFlags = JACTIVE_NONE;
-  for (int i = 0 ; i<MAX_AXES ; i++)
-    m_Amount[i] = 0;
   SetDeadzone(0);
 
   m_pDI = NULL;
@@ -77,6 +74,7 @@ CJoystick::~CJoystick()
 
 void CJoystick::ReleaseJoysticks()
 {
+  CSingleLock lock(m_critSection);
   // Unacquire the device one last time just in case
   // the app tried to exit while the device is still acquired.
   for(std::vector<LPDIRECTINPUTDEVICE8>::iterator it = m_pJoysticks.begin(); it != m_pJoysticks.end(); ++it)
@@ -88,6 +86,13 @@ void CJoystick::ReleaseJoysticks()
   m_pJoysticks.clear();
   m_JoystickNames.clear();
   m_devCaps.clear();
+  m_HatId = 0;
+  m_ButtonId = 0;
+  m_HatState = SDL_HAT_CENTERED;
+  m_ActiveFlags = JACTIVE_NONE;
+  Reset(true);
+  m_lastPressTicks = 0;
+  m_lastTicks = 0;
   // Release any DirectInput objects.
   SAFE_RELEASE( m_pDI );
 }
@@ -111,7 +116,7 @@ BOOL CALLBACK CJoystick::EnumJoysticksCallback( const DIDEVICEINSTANCE* pdidInst
     {
       // Set the cooperative level to let DInput know how this device should
       // interact with the system and with other DInput applications.
-      if( SUCCEEDED( hr = pJoystick->SetCooperativeLevel( g_hWnd, DISCL_EXCLUSIVE | DISCL_FOREGROUND ) ) )
+      if( SUCCEEDED( hr = pJoystick->SetCooperativeLevel( g_hWnd, DISCL_NONEXCLUSIVE | DISCL_FOREGROUND ) ) )
       {
         DIDEVCAPS diDevCaps;
         diDevCaps.dwSize = sizeof(DIDEVCAPS);
@@ -164,7 +169,7 @@ BOOL CALLBACK CJoystick::EnumObjectsCallback( const DIDEVICEOBJECTINSTANCE* pdid
 
       // Set the range for the axis
       if( FAILED( pJoy->SetProperty( DIPROP_RANGE, &diprg.diph ) ) )
-        return DIENUM_STOP;
+        CLog::Log(LOGDEBUG, __FUNCTION__" : Failed to set property on %s", pdidoi->tszName);
   }
 
   return DIENUM_CONTINUE;
@@ -172,10 +177,14 @@ BOOL CALLBACK CJoystick::EnumObjectsCallback( const DIDEVICEOBJECTINSTANCE* pdid
 
 void CJoystick::Initialize()
 {
+  if (!IsEnabled())
+    return;
+
   HRESULT hr;
 
   // clear old joystick names
   ReleaseJoysticks();
+  CSingleLock lock(m_critSection);
 
   if( FAILED( hr = DirectInput8Create( GetModuleHandle( NULL ), DIRECTINPUT_VERSION, IID_IDirectInput8, ( VOID** )&m_pDI, NULL ) ) )
   {
@@ -208,7 +217,7 @@ void CJoystick::Initialize()
   SetDeadzone(g_advancedSettings.m_controllerDeadzone);
 }
 
-void CJoystick::Reset(bool axis)
+void CJoystick::Reset(bool axis /*=true*/)
 {
   if (axis)
   {
@@ -222,6 +231,9 @@ void CJoystick::Reset(bool axis)
 
 void CJoystick::Update()
 {
+  if (!IsEnabled())
+    return;
+
   int buttonId    = -1;
   int axisId      = -1;
   int hatId       = -1;
@@ -274,7 +286,8 @@ void CJoystick::Update()
       }
     }
 
-    // get only first hat position
+    // get hat position
+    m_HatState = SDL_HAT_CENTERED;
     for (int h = 0; h < numhat; h++)
     {
       if((LOWORD(js.rgdwPOV[h]) == 0xFFFF) != true)
@@ -293,16 +306,18 @@ void CJoystick::Update()
 
         if ( js.rgdwPOV[0] > JOY_POVBACKWARD )
           m_HatState |= SDL_HAT_LEFT;
+        break;
       }
     }
 
     // get axis states
-    m_Amount[0] = js.lX;
-    m_Amount[1] = js.lY;
-    m_Amount[2] = js.lZ;
-    m_Amount[3] = js.lRx;
-    m_Amount[4] = js.lRy;
-    m_Amount[5] = js.lRz;
+    m_Amount[0] = 0;
+    m_Amount[1] = js.lX;
+    m_Amount[2] = js.lY;
+    m_Amount[3] = js.lZ;
+    m_Amount[4] = js.lRx;
+    m_Amount[5] = js.lRy;
+    m_Amount[6] = js.lRz;
 
     m_AxisId = GetAxisWithMaxAmount();
     if (m_AxisId)
@@ -357,8 +372,11 @@ void CJoystick::Update()
 
 bool CJoystick::GetHat(int &id, int &position,bool consider_repeat)
 {
-  if (!IsHatActive())
+  if (!IsEnabled() || !IsHatActive())
+  {
+    id = position = 0;
     return false;
+  }
   position = m_HatState;
   id = m_HatId;
   if (!consider_repeat)
@@ -388,8 +406,11 @@ bool CJoystick::GetHat(int &id, int &position,bool consider_repeat)
 
 bool CJoystick::GetButton(int &id, bool consider_repeat)
 {
-  if (!IsButtonActive())
+  if (!IsEnabled() || !IsButtonActive())
+  {
+    id = 0;
     return false;
+  }
   if (!consider_repeat)
   {
     id = m_ButtonId;
@@ -422,6 +443,17 @@ bool CJoystick::GetButton(int &id, bool consider_repeat)
   return true;
 }
 
+bool CJoystick::GetAxis (int &id)
+{ 
+  if (!IsEnabled() || !IsAxisActive()) 
+  {
+    id = 0;
+    return false; 
+  }
+  id = m_AxisId; 
+  return true; 
+}
+
 int CJoystick::GetAxisWithMaxAmount()
 {
   int maxAmount = 0;
@@ -449,6 +481,20 @@ float CJoystick::GetAmount(int axis)
   return 0;
 }
 
+void CJoystick::SetEnabled(bool enabled /*=true*/)
+{
+  if( enabled && !m_joystickEnabled )
+  {
+    m_joystickEnabled = true;
+    Initialize();
+  }
+  else if( !enabled && m_joystickEnabled )
+  {
+    ReleaseJoysticks();
+    m_joystickEnabled = false;
+  }
+}
+
 float CJoystick::SetDeadzone(float val)
 {
   if (val<0) val=0;
@@ -465,6 +511,8 @@ bool CJoystick::Reinitialize()
 
 void CJoystick::Acquire()
 {
+  if (!IsEnabled())
+    return;
   if(!m_pJoysticks.empty())
   {
     CLog::Log(LOGDEBUG, __FUNCTION__": Focus back, acquire Joysticks");

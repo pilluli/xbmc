@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -42,7 +41,7 @@ CDVDAudioCodecPassthrough::~CDVDAudioCodecPassthrough(void)
 bool CDVDAudioCodecPassthrough::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options)
 {
   /* dont open if AE doesnt support RAW */
-  if (!CAEFactory::AE->SupportsRaw())
+  if (!CAEFactory::SupportsRaw())
     return false;
 
   bool bSupportsAC3Out    = false;
@@ -171,3 +170,7 @@ void CDVDAudioCodecPassthrough::Reset()
 {
 }
 
+int CDVDAudioCodecPassthrough::GetBufferSize()
+{
+  return (int)m_info.GetBufferSize();
+}

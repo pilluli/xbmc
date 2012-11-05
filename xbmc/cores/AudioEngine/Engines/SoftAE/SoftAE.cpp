@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -27,6 +26,7 @@
 #include "utils/log.h"
 #include "utils/TimeUtils.h"
 #include "utils/MathUtils.h"
+#include "utils/EndianSwap.h"
 #include "threads/SingleLock.h"
 #include "settings/GUISettings.h"
 #include "settings/Settings.h"
@@ -42,11 +42,26 @@
 
 using namespace std;
 
+/* Define idle wait time based on platform in milliseconds */
+/* Higher wait times reduce thread CPU overhead when in    */
+/* idle or Suspend() modes                                 */
+#if defined (TARGET_WINDOWS) || defined (TARGET_LINUX) || \
+  defined (TARGET_DARWIN_OSX) || defined (TARGET_FREEBSD)
+#define SOFTAE_IDLE_WAIT_MSEC 50  // shorter sleep for HTPC's
+#elif defined (TARGET_RASPBERRY_PI) || defined (TARGET_ANDROID)
+#define SOFTAE_IDLE_WAIT_MSEC 100 // longer for R_PI and Android
+#else
+#define SOFTAE_IDLE_WAIT_MSEC 100 // catchall for undefined platforms
+#endif
+
 CSoftAE::CSoftAE():
   m_thread             (NULL        ),
   m_audiophile         (true        ),
   m_running            (false       ),
   m_reOpen             (false       ),
+  m_isSuspended        (false       ),
+  m_softSuspend        (false       ),
+  m_softSuspendTimer   (0           ),
   m_sink               (NULL        ),
   m_transcode          (false       ),
   m_rawPassthrough     (false       ),
@@ -161,6 +176,7 @@ void CSoftAE::OpenSink()
   m_reOpenEvent.Reset();
   m_reOpen = true;
   m_reOpenEvent.Wait();
+  m_wake.Set();
 }
 
 /* this must NEVER be called from outside the main thread or Initialization */
@@ -182,7 +198,11 @@ void CSoftAE::InternalOpenSink()
   AEAudioFormat newFormat;
   newFormat.m_dataFormat    = AE_FMT_FLOAT;
   newFormat.m_sampleRate    = 44100;
+  newFormat.m_encodedRate   = 0;
   newFormat.m_channelLayout = m_stereoUpmix ? m_stdChLayout : AE_CH_LAYOUT_2_0;
+  newFormat.m_frames        = 0;
+  newFormat.m_frameSamples  = 0;
+  newFormat.m_frameSize     = 0;
 
   CSingleLock streamLock(m_streamLock);
 
@@ -212,6 +232,9 @@ void CSoftAE::InternalOpenSink()
       {
         if (m_masterStream->m_initChannelLayout == AE_CH_LAYOUT_2_0)
           m_transcode = false;
+        m_encoderInitFrameSizeMul  = 1.0 / (newFormat.m_channelLayout.Count() * 
+                                           (CAEUtil::DataFormatToBits(newFormat.m_dataFormat) >> 3));
+        m_encoderInitSampleRateMul = 1.0 / newFormat.m_sampleRate;
       }
     }
 
@@ -292,6 +315,9 @@ void CSoftAE::InternalOpenSink()
       m_sink = NULL;
     }
 
+    /* get the display name of the device */
+    GetDeviceFriendlyName(device);
+
     /* if we already have a driver, prepend it to the device string */
     if (!driver.empty())
       device = driver + ":" + device;
@@ -307,20 +333,24 @@ void CSoftAE::InternalOpenSink()
     ASSERT(newFormat.m_frameSize            == (CAEUtil::DataFormatToBits(newFormat.m_dataFormat) >> 3) * newFormat.m_channelLayout.Count());
     ASSERT(newFormat.m_sampleRate            > 0);
 
-    CLog::Log(LOGINFO, "CSoftAE::InternalOpenSink - %s Initialized:", m_sink->GetName());
-    CLog::Log(LOGINFO, "  Output Device : %s", device.c_str());
-    CLog::Log(LOGINFO, "  Sample Rate   : %d", newFormat.m_sampleRate);
-    CLog::Log(LOGINFO, "  Sample Format : %s", CAEUtil::DataFormatToStr(newFormat.m_dataFormat));
-    CLog::Log(LOGINFO, "  Channel Count : %d", newFormat.m_channelLayout.Count());
-    CLog::Log(LOGINFO, "  Channel Layout: %s", ((std::string)newFormat.m_channelLayout).c_str());
-    CLog::Log(LOGINFO, "  Frames        : %d", newFormat.m_frames);
-    CLog::Log(LOGINFO, "  Frame Samples : %d", newFormat.m_frameSamples);
-    CLog::Log(LOGINFO, "  Frame Size    : %d", newFormat.m_frameSize);
+    CLog::Log(LOGDEBUG, "CSoftAE::InternalOpenSink - %s Initialized:", m_sink->GetName());
+    CLog::Log(LOGDEBUG, "  Output Device : %s", m_deviceFriendlyName.c_str());
+    CLog::Log(LOGDEBUG, "  Sample Rate   : %d", newFormat.m_sampleRate);
+    CLog::Log(LOGDEBUG, "  Sample Format : %s", CAEUtil::DataFormatToStr(newFormat.m_dataFormat));
+    CLog::Log(LOGDEBUG, "  Channel Count : %d", newFormat.m_channelLayout.Count());
+    CLog::Log(LOGDEBUG, "  Channel Layout: %s", ((std::string)newFormat.m_channelLayout).c_str());
+    CLog::Log(LOGDEBUG, "  Frames        : %d", newFormat.m_frames);
+    CLog::Log(LOGDEBUG, "  Frame Samples : %d", newFormat.m_frameSamples);
+    CLog::Log(LOGDEBUG, "  Frame Size    : %d", newFormat.m_frameSize);
 
     m_sinkFormat              = newFormat;
-    m_sinkFormatSampleRateMul = 1.0 / (float)newFormat.m_sampleRate;
-    m_sinkFormatFrameSizeMul  = 1.0 / (float)newFormat.m_frameSize;
+    m_sinkFormatSampleRateMul = 1.0 / (double)newFormat.m_sampleRate;
+    m_sinkFormatFrameSizeMul  = 1.0 / (double)newFormat.m_frameSize;
     m_sinkBlockSize           = newFormat.m_frames * newFormat.m_frameSize;
+    // check if sink controls volume, if so, init the volume.
+    m_sinkHandlesVolume       = m_sink->HasVolume();
+    if (m_sinkHandlesVolume)
+      m_sink->SetVolume(m_volume);
 
     /* invalidate the buffer */
     m_buffer.Empty();
@@ -360,15 +390,23 @@ void CSoftAE::InternalOpenSink()
 
       /* configure the encoder */
       AEAudioFormat encoderFormat;
-      encoderFormat.m_sampleRate    = m_sinkFormat.m_sampleRate;
       encoderFormat.m_dataFormat    = AE_FMT_FLOAT;
+      encoderFormat.m_sampleRate    = m_sinkFormat.m_sampleRate;
+      encoderFormat.m_encodedRate   = 0;
       encoderFormat.m_channelLayout = m_chLayout;
+      encoderFormat.m_frames        = 0;
+      encoderFormat.m_frameSamples  = 0;
+      encoderFormat.m_frameSize     = 0;
+      
       if (!m_encoder || !m_encoder->IsCompatible(encoderFormat))
       {
         m_buffer.Empty();
         SetupEncoder(encoderFormat);
         m_encoderFormat       = encoderFormat;
-        m_encoderFrameSizeMul = 1.0 / (float)encoderFormat.m_frameSize;
+        if (encoderFormat.m_frameSize > 0)
+          m_encoderFrameSizeMul = 1.0 / (double)m_sinkFormat.m_frameSize;
+        else
+          m_encoderFrameSizeMul = 1.0;
       }
 
       /* remap directly to the format we need for encode */
@@ -376,31 +414,38 @@ void CSoftAE::InternalOpenSink()
       m_chLayout       = m_encoderFormat.m_channelLayout;
       m_convertFn      = CAEConvert::FrFloat(m_encoderFormat.m_dataFormat);
       neededBufferSize = m_encoderFormat.m_frames * sizeof(float) * m_chLayout.Count();
-      CLog::Log(LOGDEBUG, "CSoftAE::Initialize - Encoding using layout: %s", ((std::string)m_chLayout).c_str());
+      CLog::Log(LOGDEBUG, "CSoftAE::InternalOpenSink - Encoding using layout: %s", ((std::string)m_chLayout).c_str());
     }
     else
     {
       m_convertFn      = CAEConvert::FrFloat(m_sinkFormat.m_dataFormat);
       neededBufferSize = m_sinkFormat.m_frames * sizeof(float) * m_chLayout.Count();
-      CLog::Log(LOGDEBUG, "CSoftAE::Initialize - Using speaker layout: %s", CAEUtil::GetStdChLayoutName(m_stdChLayout));
+      CLog::Log(LOGDEBUG, "CSoftAE::InternalOpenSink - Using speaker layout: %s", CAEUtil::GetStdChLayoutName(m_stdChLayout));
     }
 
     m_bytesPerSample = CAEUtil::DataFormatToBits(AE_FMT_FLOAT) >> 3;
     m_frameSize      = m_bytesPerSample * m_chLayout.Count();
   }
 
+  CLog::Log(LOGDEBUG, "CSoftAE::InternalOpenSink - Internal Buffer Size: %d", (int)neededBufferSize);
   if (m_buffer.Size() < neededBufferSize)
     m_buffer.Alloc(neededBufferSize);
 
   if (reInit)
   {
-    /* re-init sounds */
     if (!m_rawPassthrough)
     {
+      /* re-init incompatible sounds */
       CSingleLock soundLock(m_soundLock);
-      StopAllSounds();
       for (SoundList::iterator itt = m_sounds.begin(); itt != m_sounds.end(); ++itt)
-        (*itt)->Initialize();
+      {
+        CSoftAESound *sound = *itt;
+        if (!sound->IsCompatible())
+        {
+          StopSound(sound);
+          sound->Initialize();
+        }
+      }
     }
 
     /* re-init streams */
@@ -421,9 +466,12 @@ void CSoftAE::InternalOpenSink()
   m_newStreams.clear();
   m_streamsPlaying = !m_playingStreams.empty();
 
+  m_softSuspend = false;
+
   /* notify any event listeners that we are done */
   m_reOpen = false;
   m_reOpenEvent.Set();
+  m_wake.Set();
 }
 
 void CSoftAE::ResetEncoder()
@@ -466,13 +514,16 @@ bool CSoftAE::Initialize()
   return true;
 }
 
-void CSoftAE::OnSettingsChange(std::string setting)
+void CSoftAE::OnSettingsChange(const std::string& setting)
 {
   if (setting == "audiooutput.passthroughdevice" ||
       setting == "audiooutput.audiodevice"       ||
       setting == "audiooutput.mode"              ||
       setting == "audiooutput.ac3passthrough"    ||
       setting == "audiooutput.dtspassthrough"    ||
+      setting == "audiooutput.passthroughaac"    ||
+      setting == "audiooutput.truehdpassthrough" ||
+      setting == "audiooutput.dtshdpassthrough"  ||
       setting == "audiooutput.channellayout"     ||
       setting == "audiooutput.useexclusivemode"  ||
       setting == "audiooutput.multichannellpcm"  ||
@@ -481,7 +532,7 @@ void CSoftAE::OnSettingsChange(std::string setting)
     OpenSink();
   }
 
-  if (setting == "audiooutput.dontnormalizelevels" || setting == "audiooutput.stereoupmix")
+  if (setting == "audiooutput.normalizelevels" || setting == "audiooutput.stereoupmix")
   {
     /* re-init stream reamppers */
     CSingleLock streamLock(m_streamLock);
@@ -517,6 +568,10 @@ void CSoftAE::LoadSettings()
     case  9: m_stdChLayout = AE_CH_LAYOUT_7_0; break;
     case 10: m_stdChLayout = AE_CH_LAYOUT_7_1; break;
   }
+
+  // force optical/coax to 2.0 output channels
+  if (!m_rawPassthrough && g_guiSettings.GetInt("audiooutput.mode") == AUDIO_IEC958)
+    m_stdChLayout = AE_CH_LAYOUT_2_0;
 
   /* get the output devices and ensure they exist */
   m_device            = g_guiSettings.GetString("audiooutput.audiodevice");
@@ -560,6 +615,26 @@ void CSoftAE::VerifySoundDevice(std::string& device, bool passthrough)
   device = firstDevice;
 }
 
+inline void CSoftAE::GetDeviceFriendlyName(std::string &device)
+{
+  m_deviceFriendlyName = "Device not found";
+  /* Match the device and find its friendly name */
+  for (AESinkInfoList::iterator itt = m_sinkInfoList.begin(); itt != m_sinkInfoList.end(); ++itt)
+  {
+    AESinkInfo sinkInfo = *itt;
+    for (AEDeviceInfoList::iterator itt2 = sinkInfo.m_deviceInfoList.begin(); itt2 != sinkInfo.m_deviceInfoList.end(); ++itt2)
+    {
+      CAEDeviceInfo& devInfo = *itt2;
+      if (devInfo.m_deviceName == device)
+      {
+        m_deviceFriendlyName = devInfo.m_displayName;
+        break;
+      }
+    }
+  }
+  return;
+}
+
 void CSoftAE::Deinitialize()
 {
   if (m_thread)
@@ -580,7 +655,6 @@ void CSoftAE::Deinitialize()
 
   delete m_encoder;
   m_encoder = NULL;
-
   ResetEncoder();
   m_buffer.DeAlloc();
 
@@ -665,6 +739,8 @@ void CSoftAE::ResumeStream(CSoftAEStream *stream)
 void CSoftAE::Stop()
 {
   m_running = false;
+  m_isSuspended = false;
+  m_wake.Set();
 
   /* wait for the thread to stop */
   CSingleLock lock(m_runningLock);
@@ -719,18 +795,22 @@ void CSoftAE::PlaySound(IAESound *sound)
   if (m_soundMode == AE_SOUND_OFF || (m_soundMode == AE_SOUND_IDLE && m_streamsPlaying))
     return;
 
-   float *samples = ((CSoftAESound*)sound)->GetSamples();
-   if (!samples)
-     return;
+  float *samples = ((CSoftAESound*)sound)->GetSamples();
+  if (!samples)
+    return;
 
-   /* add the sound to the play list */
-   CSingleLock soundSampleLock(m_soundSampleLock);
-   SoundState ss = {
-      ((CSoftAESound*)sound),
-      samples,
-      ((CSoftAESound*)sound)->GetSampleCount()
-   };
-   m_playing_sounds.push_back(ss);
+  /* add the sound to the play list */
+  CSingleLock soundSampleLock(m_soundSampleLock);
+  SoundState ss = {
+    ((CSoftAESound*)sound),
+    samples,
+    ((CSoftAESound*)sound)->GetSampleCount()
+  };
+  m_playing_sounds.push_back(ss);
+
+  /* wake to play the sound */
+  m_softSuspend = false;
+  m_wake.Set();
 }
 
 void CSoftAE::FreeSound(IAESound *sound)
@@ -794,36 +874,64 @@ IAEStream *CSoftAE::FreeStream(IAEStream *stream)
 
 double CSoftAE::GetDelay()
 {
+  double delayBuffer = 0.0, delaySink = 0.0, delayTranscoder = 0.0;
+
   CSharedLock sinkLock(m_sinkLock);
-
-  double delay = m_sink->GetDelay();
+  if (m_sink)
+    delaySink = m_sink->GetDelay();
+ 
   if (m_transcode && m_encoder && !m_rawPassthrough)
-    delay += m_encoder->GetDelay((double)m_encodedBuffer.Used() * m_encoderFrameSizeMul);
-  double buffered = (double)m_buffer.Used() * m_sinkFormatFrameSizeMul;
+  {
+    delayBuffer     = (double)m_buffer.Used() * m_encoderInitFrameSizeMul * m_encoderInitSampleRateMul;
+    delayTranscoder = m_encoder->GetDelay((double)m_encodedBuffer.Used() * m_encoderFrameSizeMul);
+  }
+  else
+    delayBuffer = (double)m_buffer.Used() * m_sinkFormatFrameSizeMul *m_sinkFormatSampleRateMul;
 
-  return delay + (buffered * m_sinkFormatSampleRateMul);
+  return delayBuffer + delaySink + delayTranscoder;
 }
 
 double CSoftAE::GetCacheTime()
 {
+  double timeBuffer = 0.0, timeSink = 0.0, timeTranscoder = 0.0;
+
   CSharedLock sinkLock(m_sinkLock);
+  if (m_sink)
+    timeSink = m_sink->GetCacheTime();
 
-  double time;
-  time  = (double)m_buffer.Free() * m_sinkFormatFrameSizeMul * m_sinkFormatSampleRateMul;
-  time += m_sink->GetCacheTime();
+  if (m_transcode && m_encoder && !m_rawPassthrough)
+  {
+    timeBuffer     = (double)m_buffer.Used() * m_encoderInitFrameSizeMul * m_encoderInitSampleRateMul;
+    timeTranscoder = m_encoder->GetDelay((double)m_encodedBuffer.Used() * m_encoderFrameSizeMul);
+  }
+  else
+    timeBuffer = (double)m_buffer.Used() * m_sinkFormatFrameSizeMul *m_sinkFormatSampleRateMul;
 
-  return time;
+  return timeBuffer + timeSink + timeTranscoder;
 }
 
 double CSoftAE::GetCacheTotal()
 {
+  double timeBuffer = 0.0, timeSink = 0.0, timeTranscoder = 0.0;
+
   CSharedLock sinkLock(m_sinkLock);
+  if (m_sink)
+    timeSink = m_sink->GetCacheTotal();
 
-  double total;
-  total  = (double)m_buffer.Size() * m_sinkFormatFrameSizeMul * m_sinkFormatSampleRateMul;
-  total += m_sink->GetCacheTotal();
+  if (m_transcode && m_encoder && !m_rawPassthrough)
+  {
+    timeBuffer     = (double)m_buffer.Size() * m_encoderInitFrameSizeMul * m_encoderInitSampleRateMul;
+    timeTranscoder = m_encoder->GetDelay((double)m_encodedBuffer.Size() * m_encoderFrameSizeMul);
+  }
+  else
+    timeBuffer = (double)m_buffer.Size() * m_sinkFormatFrameSizeMul *m_sinkFormatSampleRateMul;
 
-  return total;
+  return timeBuffer + timeSink + timeTranscoder;
+}
+
+bool CSoftAE::IsSuspended()
+{
+  return m_isSuspended;
 }
 
 float CSoftAE::GetVolume()
@@ -834,6 +942,12 @@ float CSoftAE::GetVolume()
 void CSoftAE::SetVolume(float volume)
 {
   m_volume = volume;
+  if (!m_sinkHandlesVolume)
+    return;
+
+  CSharedLock sinkLock(m_sinkLock);
+  if (m_sink)
+    m_sink->SetVolume(m_volume);
 }
 
 void CSoftAE::StopAllSounds()
@@ -847,17 +961,44 @@ void CSoftAE::StopAllSounds()
   }
 }
 
+bool CSoftAE::Suspend()
+{
+  CLog::Log(LOGDEBUG, "CSoftAE::Suspend - Suspending AE processing");
+  m_isSuspended = true;
+
+  CSingleLock streamLock(m_streamLock);
+  
+  for (StreamList::iterator itt = m_playingStreams.begin(); itt != m_playingStreams.end(); ++itt)
+  {
+    CSoftAEStream *stream = *itt;
+    stream->Flush();
+  }
+
+  return true;
+}
+
+bool CSoftAE::Resume()
+{
+  CLog::Log(LOGDEBUG, "CSoftAE::Resume - Resuming AE processing");
+  m_isSuspended = false;
+  m_reOpen = true;
+
+  return true;
+}
+
 void CSoftAE::Run()
 {
   /* we release this when we exit the thread unblocking anyone waiting on "Stop" */
   CSingleLock runningLock(m_runningLock);
   CLog::Log(LOGINFO, "CSoftAE::Run - Thread Started");
 
+  bool hasAudio = false;
   while (m_running)
   {
     bool restart = false;
 
-    (this->*m_outputStageFn)();
+    if ((this->*m_outputStageFn)(hasAudio) > 0)
+      hasAudio = false; /* taken some audio - reset our silence flag */
 
     /* if we have enough room in the buffer */
     if (m_buffer.Free() >= m_frameSize)
@@ -868,30 +1009,79 @@ void CSoftAE::Run()
 
       /* run the stream stage */
       CSoftAEStream *oldMaster = m_masterStream;
-      (this->*m_streamStageFn)(m_chLayout.Count(), out, restart);
+      if ((this->*m_streamStageFn)(m_chLayout.Count(), out, restart) > 0)
+        hasAudio = true; /* have some audio */
 
       /* if in audiophile mode and the master stream has changed, flag for restart */
       if (m_audiophile && oldMaster != m_masterStream)
         restart = true;
     }
 
+    if (m_playingStreams.empty() && m_playing_sounds.empty() && m_streams.empty() && 
+       !m_softSuspend && !g_advancedSettings.m_streamSilence)
+    {
+      m_softSuspend = true;
+      m_softSuspendTimer = XbmcThreads::SystemClockMillis() + 10000; //10.0 second delay for softSuspend
+    }
+
+    unsigned int curSystemClock = XbmcThreads::SystemClockMillis();
+
+    /* idle while in Suspend() state until Resume() called */
+    /* idle if nothing to play and user hasn't enabled     */
+    /* continuous streaming (silent stream) in as.xml      */
+    while ((m_isSuspended || (m_softSuspend && (curSystemClock > m_softSuspendTimer))) &&
+            m_running     && !m_reOpen      && !restart)
+    {
+      if (m_sink)
+      {
+        /* take the sink lock */
+        CExclusiveLock sinkLock(m_sinkLock);
+        //m_sink->Drain(); TODO: implement
+        m_sink->Deinitialize();
+        delete m_sink;
+        m_sink = NULL;
+      }
+      if (!m_playingStreams.empty() || !m_playing_sounds.empty() || m_sounds.empty())
+        m_softSuspend = false;
+      m_wake.WaitMSec(SOFTAE_IDLE_WAIT_MSEC);
+    }
+
     /* if we are told to restart */
-    if (m_reOpen || restart)
+    if (m_reOpen || restart || !m_sink)
     {
       CLog::Log(LOGDEBUG, "CSoftAE::Run - Sink restart flagged");
       InternalOpenSink();
+      m_isSuspended = false; // exit Suspend state
     }
   }
 }
 
-void CSoftAE::MixSounds(float *buffer, unsigned int samples)
+void CSoftAE::AllocateConvIfNeeded(size_t convertedSize, bool prezero)
 {
-  SoundStateList::iterator itt;
+  if (m_convertedSize < convertedSize)
+  {
+    _aligned_free(m_converted);
+    m_converted = (uint8_t *)_aligned_malloc(convertedSize, 16);
+    m_convertedSize = convertedSize;
+  }
+  if (prezero)
+    memset(m_converted, 0x00, convertedSize);
+}
 
+unsigned int CSoftAE::MixSounds(float *buffer, unsigned int samples)
+{
+  // no point doing anything if we have no sounds,
+  // we do not have to take a lock just to check empty
+  if (m_playing_sounds.empty())
+    return 0;
+
+  SoundStateList::iterator itt;
+  unsigned int mixed = 0;
   CSingleLock lock(m_soundSampleLock);
   for (itt = m_playing_sounds.begin(); itt != m_playing_sounds.end(); )
   {
     SoundState *ss = &(*itt);
+    float *out = buffer;
 
     /* no more frames, so remove it from the list */
     if (ss->sampleCount == 0)
@@ -903,96 +1093,94 @@ void CSoftAE::MixSounds(float *buffer, unsigned int samples)
 
     float volume = ss->owner->GetVolume();
     unsigned int mixSamples = std::min(ss->sampleCount, samples);
-
     #ifdef __SSE__
-      CAEUtil::SSEMulAddArray(buffer, ss->samples, volume, mixSamples);
+      CAEUtil::SSEMulAddArray(out, ss->samples, volume, mixSamples);
     #else
+      float *sample_buffer = ss->samples;
       for (unsigned int i = 0; i < mixSamples; ++i)
-        buffer[i] = (buffer[i] + (ss->samples[i] * volume));
+        *out++ += *sample_buffer++ * volume;
     #endif
 
     ss->sampleCount -= mixSamples;
     ss->samples     += mixSamples;
 
     ++itt;
+    ++mixed;
   }
+  return mixed;
 }
 
-void CSoftAE::FinalizeSamples(float *buffer, unsigned int samples)
+bool CSoftAE::FinalizeSamples(float *buffer, unsigned int samples, bool hasAudio)
 {
   if (m_soundMode != AE_SOUND_OFF)
-    MixSounds(buffer, samples);
+    hasAudio |= (MixSounds(buffer, samples) > 0);
+
+  /* no need to process if we don't have audio (buffer is memset to 0) */
+  if (!hasAudio)
+    return false;
 
   if (m_muted)
   {
     memset(buffer, 0, samples * sizeof(float));
-    return;
+    return false;
   }
 
   /* deamplify */
-  bool clamp = false;
-  if (m_volume < 1.0)
+  if (!m_sinkHandlesVolume && m_volume < 1.0)
   {
     #ifdef __SSE__
       CAEUtil::SSEMulArray(buffer, m_volume, samples);
-      for (unsigned int i = 0; i < samples; ++i)
-        if (buffer[i] < -1.0f || buffer[i] > 1.0f)
-        {
-          clamp = true;
-          break;
-        }
     #else
-      for (unsigned int i = 0; i < samples; ++i)
-      {
-        buffer[i] *= m_volume;
-        if (!clamp && (buffer[i] < -1.0f || buffer[i] > 1.0f))
-          clamp = true;
-      }
+      float *fbuffer = buffer;
+      for (unsigned int i = 0; i < samples; i++)
+        *fbuffer++ *= m_volume;
     #endif
   }
-  else
+
+  /* check if we need to clamp */
+  bool clamp = false;
+  float *fbuffer = buffer;
+  for (unsigned int i = 0; i < samples; i++, fbuffer++)
   {
-    for (unsigned int i = 0; i < samples; ++i)
-      if (buffer[i] < -1.0f || buffer[i] > 1.0f)
-      {
-        clamp = true;
-        break;
-      }
+    if (*fbuffer < -1.0f || *fbuffer > 1.0f)
+    {
+      clamp = true;
+      break;
+    }
   }
 
   /* if there were no samples outside of the range, dont clamp the buffer */
   if (!clamp)
-    return;
+    return true;
 
   CLog::Log(LOGDEBUG, "CSoftAE::FinalizeSamples - Clamping buffer of %d samples", samples);
   CAEUtil::ClampArray(buffer, samples);
+  return true;
 }
 
-void CSoftAE::RunOutputStage()
+int CSoftAE::RunOutputStage(bool hasAudio)
 {
   const unsigned int needSamples = m_sinkFormat.m_frames * m_sinkFormat.m_channelLayout.Count();
   const size_t needBytes = needSamples * sizeof(float);
   if (m_buffer.Used() < needBytes)
-    return;
+    return 0;
 
   void *data = m_buffer.Raw(needBytes);
-  FinalizeSamples((float*)data, needSamples);
+  hasAudio = FinalizeSamples((float*)data, needSamples, hasAudio);
 
-  int wroteFrames;
+  int wroteFrames = 0;
   if (m_convertFn)
   {
     const unsigned int convertedBytes = m_sinkFormat.m_frames * m_sinkFormat.m_frameSize;
-    if (m_convertedSize < convertedBytes)
-    {
-      _aligned_free(m_converted);
-      m_converted = (uint8_t *)_aligned_malloc(convertedBytes, 16);
-      m_convertedSize = convertedBytes;
-    }
-    m_convertFn((float*)data, needSamples, m_converted);
+    AllocateConvIfNeeded(convertedBytes, !hasAudio);
+    if (hasAudio)
+      m_convertFn((float*)data, needSamples, m_converted);
     data = m_converted;
   }
 
-  wroteFrames = m_sink->AddPackets((uint8_t*)data, m_sinkFormat.m_frames);
+  /* Output frames to sink */
+  if (m_sink)
+    wroteFrames = m_sink->AddPackets((uint8_t*)data, m_sinkFormat.m_frames, hasAudio);
 
   /* Return value of INT_MAX signals error in sink - restart */
   if (wroteFrames == INT_MAX)
@@ -1002,15 +1190,40 @@ void CSoftAE::RunOutputStage()
     m_reOpen = true;
   }
 
-  m_buffer.Shift(NULL, wroteFrames * m_sinkFormat.m_channelLayout.Count() * sizeof(float));
+  if (wroteFrames)
+    m_buffer.Shift(NULL, wroteFrames * m_sinkFormat.m_channelLayout.Count() * sizeof(float));
+
+  return wroteFrames;
 }
 
-void CSoftAE::RunRawOutputStage()
+int CSoftAE::RunRawOutputStage(bool hasAudio)
 {
   if(m_buffer.Used() < m_sinkBlockSize)
-    return;
+    return 0;
 
-  int wroteFrames = m_sink->AddPackets((uint8_t*)m_buffer.Raw(m_sinkBlockSize), m_sinkFormat.m_frames);
+  void *data = m_buffer.Raw(m_sinkBlockSize);
+
+  if (CAEUtil::S16NeedsByteSwap(AE_FMT_S16NE, m_sinkFormat.m_dataFormat))
+  {
+    /*
+     * It would really be preferable to handle this at packing stage, so that
+     * it could byteswap the data efficiently without wasting CPU time on
+     * swapping the huge IEC 61937 zero padding between frames (or not
+     * byteswap at all, if there are two byteswaps).
+     *
+     * Unfortunately packing is done on a higher level and we can't easily
+     * tell it the needed format from here, so do it here for now (better than
+     * nothing)...
+     */
+    AllocateConvIfNeeded(m_sinkBlockSize, !hasAudio);
+    if (hasAudio)
+      Endian_Swap16_buf((uint16_t *)m_converted, (uint16_t *)data, m_sinkBlockSize / 2);
+    data = m_converted;
+  }
+
+  int wroteFrames = 0;
+  if (m_sink)
+    wroteFrames = m_sink->AddPackets((uint8_t *)data, m_sinkFormat.m_frames, hasAudio);
 
   /* Return value of INT_MAX signals error in sink - restart */
   if (wroteFrames == INT_MAX)
@@ -1021,39 +1234,34 @@ void CSoftAE::RunRawOutputStage()
   }
 
   m_buffer.Shift(NULL, wroteFrames * m_sinkFormat.m_frameSize);
+  return wroteFrames;
 }
 
-void CSoftAE::RunTranscodeStage()
+int CSoftAE::RunTranscodeStage(bool hasAudio)
 {
   /* if we dont have enough samples to encode yet, return */
   unsigned int block     = m_encoderFormat.m_frames * m_encoderFormat.m_frameSize;
   unsigned int sinkBlock = m_sinkFormat.m_frames    * m_sinkFormat.m_frameSize;
 
+  int encodedFrames = 0;
   if (m_buffer.Used() >= block && m_encodedBuffer.Used() < sinkBlock * 2)
   {
-    FinalizeSamples((float*)m_buffer.Raw(block), m_encoderFormat.m_frameSamples);
+    hasAudio = FinalizeSamples((float*)m_buffer.Raw(block), m_encoderFormat.m_frameSamples, hasAudio);
 
     void *buffer;
     if (m_convertFn)
     {
       unsigned int newsize = m_encoderFormat.m_frames * m_encoderFormat.m_frameSize;
-      if (m_convertedSize < newsize)
-      {
-        _aligned_free(m_converted);
-        m_converted     = (uint8_t *)_aligned_malloc(newsize, 16);
-        m_convertedSize = newsize;
-      }
-      m_convertFn(
-        (float*)m_buffer.Raw(block),
-        m_encoderFormat.m_frames * m_encoderFormat.m_channelLayout.Count(),
-        m_converted
-      );
+      AllocateConvIfNeeded(newsize, !hasAudio);
+      if (hasAudio)
+        m_convertFn((float*)m_buffer.Raw(block),
+          m_encoderFormat.m_frames * m_encoderFormat.m_channelLayout.Count(), m_converted);
       buffer = m_converted;
     }
     else
       buffer = m_buffer.Raw(block);
 
-    int encodedFrames  = m_encoder->Encode((float*)buffer, m_encoderFormat.m_frames);
+    encodedFrames = m_encoder->Encode((float*)buffer, m_encoderFormat.m_frames);
     m_buffer.Shift(NULL, encodedFrames * m_encoderFormat.m_frameSize);
 
     uint8_t *packet;
@@ -1069,7 +1277,7 @@ void CSoftAE::RunTranscodeStage()
   /* if we have enough data to write */
   if (m_encodedBuffer.Used() >= sinkBlock)
   {
-    int wroteFrames = m_sink->AddPackets((uint8_t*)m_encodedBuffer.Raw(sinkBlock), m_sinkFormat.m_frames);
+    int wroteFrames = m_sink->AddPackets((uint8_t*)m_encodedBuffer.Raw(sinkBlock), m_sinkFormat.m_frames, hasAudio);
     
     /* Return value of INT_MAX signals error in sink - restart */
     if (wroteFrames == INT_MAX)
@@ -1081,6 +1289,7 @@ void CSoftAE::RunTranscodeStage()
 
     m_encodedBuffer.Shift(NULL, wroteFrames * m_sinkFormat.m_frameSize);
   }
+  return encodedFrames;
 }
 
 unsigned int CSoftAE::RunRawStreamStage(unsigned int channelCount, void *out, bool &restart)
@@ -1129,15 +1338,16 @@ unsigned int CSoftAE::RunRawStreamStage(unsigned int channelCount, void *out, bo
 
 unsigned int CSoftAE::RunStreamStage(unsigned int channelCount, void *out, bool &restart)
 {
+  // no point doing anything if we have no streams,
+  // we do not have to take a lock just to check empty
+  if (m_playingStreams.empty())
+    return 0;
+
   float *dst = (float*)out;
   unsigned int mixed = 0;
 
   /* identify the master stream */
   CSingleLock streamLock(m_streamLock);
-
-  /* no point doing anything if we have no streams */
-  if (m_playingStreams.empty())
-    return mixed;
 
   /* mix in any running streams */
   StreamList resumeStreams;
@@ -1159,23 +1369,8 @@ unsigned int CSoftAE::RunStreamStage(unsigned int channelCount, void *out, bool 
     else
     #endif
     {
-      /* unrolled loop for performance */
-      unsigned int blocks = channelCount & ~0x3;
-      unsigned int i      = 0;
-      for (i = 0; i < blocks; i += 4)
-      {
-        dst[i+0] += frame[i+0] * volume;
-        dst[i+1] += frame[i+1] * volume;
-        dst[i+2] += frame[i+2] * volume;
-        dst[i+3] += frame[i+3] * volume;
-      }
-
-      switch (channelCount & 0x3)
-      {
-        case 3: dst[i] += frame[i] * volume; ++i;
-        case 2: dst[i] += frame[i] * volume; ++i;
-        case 1: dst[i] += frame[i] * volume;
-      }
+      for (unsigned int i = 0; i < channelCount; ++i)
+        *dst++ += *frame++ * volume;
     }
 
     ++mixed;

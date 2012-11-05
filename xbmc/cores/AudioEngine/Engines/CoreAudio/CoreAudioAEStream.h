@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -24,11 +23,11 @@
 #include <list>
 
 #include "AEAudioFormat.h"
-#include "AEConvert.h"
-#include "AERemap.h"
 #include "CoreAudioRingBuffer.h"
 #include "ICoreAudioSource.h"
 #include "Interfaces/AEStream.h"
+#include "cores/AudioEngine/Utils/AEConvert.h"
+#include "cores/AudioEngine/Utils/AERemap.h"
 
 #if defined(TARGET_DARWIN_IOS)
 # include "CoreAudioAEHALIOS.h"

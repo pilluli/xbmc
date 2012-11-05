@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -38,6 +37,7 @@ CPulseAESound::CPulseAESound(const std::string &filename, pa_context *context, p
   m_op             (NULL    )
 {
   m_pulseName = StringUtils::CreateUUID();
+  m_wavLoader.Load(filename);
 }
 
 CPulseAESound::~CPulseAESound()
@@ -48,12 +48,12 @@ CPulseAESound::~CPulseAESound()
 bool CPulseAESound::Initialize()
 {
   /* we dont re-init the wav loader in PA as PA handles the samplerate */
-  if (!m_wavLoader.IsValid() && !m_wavLoader.Initialize(m_filename, 0))
+  if (!m_wavLoader.IsValid())
     return false;
 
   m_sampleSpec.format   = PA_SAMPLE_FLOAT32NE;
   m_sampleSpec.rate     = m_wavLoader.GetSampleRate();
-  m_sampleSpec.channels = m_wavLoader.GetChannelCount();
+  m_sampleSpec.channels = m_wavLoader.GetChannelLayout().Count();
 
   if (!pa_sample_spec_valid(&m_sampleSpec))
   {
@@ -79,7 +79,7 @@ bool CPulseAESound::Initialize()
       return false;
   }
 
-  m_maxVolume     = CAEFactory::AE->GetVolume();
+  m_maxVolume     = CAEFactory::GetEngine()->GetVolume();
   m_volume        = 1.0f;
   pa_volume_t paVolume = pa_sw_volume_from_linear((double)(m_volume * m_maxVolume));
   pa_cvolume_set(&m_chVolume, m_sampleSpec.channels, paVolume);

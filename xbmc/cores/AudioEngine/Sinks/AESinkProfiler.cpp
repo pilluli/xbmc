@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -73,7 +72,7 @@ double CAESinkProfiler::GetDelay()
   return 0.0f;
 }
 
-unsigned int CAESinkProfiler::AddPackets(uint8_t *data, unsigned int frames)
+unsigned int CAESinkProfiler::AddPackets(uint8_t *data, unsigned int frames, bool hasAudio)
 {
   int64_t ts = CurrentHostCounter();
   CLog::Log(LOGDEBUG, "CAESinkProfiler::AddPackets - latency %f ms", (float)(ts - m_ts) / 1000000.0f);

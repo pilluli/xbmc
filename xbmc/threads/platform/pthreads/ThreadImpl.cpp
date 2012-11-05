@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2011 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,14 +13,17 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include <limits.h>
+#if defined(TARGET_ANDROID)
+#include <unistd.h>
+#else
 #include <sys/syscall.h>
+#endif
 #include <sys/resource.h>
 #include <string.h>
 #ifdef __FreeBSD__
@@ -32,26 +35,16 @@
 #endif
 #endif
 
-void CThread::Create(bool bAutoDelete, unsigned stacksize)
-{
-  if (m_ThreadId != 0)
-  {
-    if (logger) logger->Log(LOGERROR, "%s - fatal error creating thread- old thread id not null", __FUNCTION__);
-    exit(1);
-  }
-  m_iLastTime = XbmcThreads::SystemClockMillis() * 10000;
-  m_iLastUsage = 0;
-  m_fLastUsage = 0.0f;
-  m_bAutoDelete = bAutoDelete;
-  m_bStop = false;
-  m_StopEvent.Reset();
-  m_TermEvent.Reset();
-  m_StartEvent.Reset();
+#include <signal.h>
 
+void CThread::SpawnThread(unsigned stacksize)
+{
   pthread_attr_t attr;
   pthread_attr_init(&attr);
+#if !defined(TARGET_ANDROID) // http://code.google.com/p/android/issues/detail?id=7808
   if (stacksize > PTHREAD_STACK_MIN)
     pthread_attr_setstacksize(&attr, stacksize);
+#endif
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   if (pthread_create(&m_ThreadId, &attr, (void*(*)(void*))staticThread, this) != 0)
   {
@@ -60,10 +53,7 @@ void CThread::Create(bool bAutoDelete, unsigned stacksize)
   pthread_attr_destroy(&attr);
 }
 
-void CThread::TermHandler()
-{
-
-}
+void CThread::TermHandler() { }
 
 void CThread::SetThreadInfo()
 {
@@ -75,14 +65,41 @@ void CThread::SetThreadInfo()
 #else
   m_ThreadOpaque.LwpId = pthread_getthreadid_np();
 #endif
+#elif defined(TARGET_ANDROID)
+  m_ThreadOpaque.LwpId = gettid();
 #else
   m_ThreadOpaque.LwpId = syscall(SYS_gettid);
 #endif
 
-  // start thread with nice level of appication
-  int appNice = getpriority(PRIO_PROCESS, getpid());
-  if (setpriority(PRIO_PROCESS, m_ThreadOpaque.LwpId, appNice) != 0)
-    if (logger) logger->Log(LOGERROR, "%s: error %s", __FUNCTION__, strerror(errno));
+#ifdef TARGET_DARWIN
+#if(__MAC_OS_X_VERSION_MIN_REQUIRED >= 1060 || __IPHONE_OS_VERSION_MIN_REQUIRED >= 30200)
+  pthread_setname_np(m_ThreadName.c_str());
+#endif
+#endif
+    
+#ifdef RLIMIT_NICE
+  // get user max prio
+  struct rlimit limit;
+  int userMaxPrio;
+  if (getrlimit(RLIMIT_NICE, &limit) == 0)
+  {
+    userMaxPrio = limit.rlim_cur - 20;
+    if (userMaxPrio < 0)
+      userMaxPrio = 0;
+  }
+  else
+    userMaxPrio = 0;
+
+  // if the user does not have an entry in limits.conf the following
+  // call will fail
+  if (userMaxPrio > 0)
+  {
+    // start thread with nice level of appication
+    int appNice = getpriority(PRIO_PROCESS, getpid());
+    if (setpriority(PRIO_PROCESS, m_ThreadOpaque.LwpId, appNice) != 0)
+      if (logger) logger->Log(LOGERROR, "%s: error %s", __FUNCTION__, strerror(errno));
+  }
+#endif
 }
 
 ThreadIdentifier CThread::GetCurrentThreadId()
@@ -138,6 +155,9 @@ bool CThread::SetPriority(const int iPriority)
     if (getrlimit(RLIMIT_NICE, &limit) == 0)
     {
       userMaxPrio = limit.rlim_cur - 20;
+      // is a user has no entry in limits.conf rlim_cur is zero
+      if (userMaxPrio < 0)
+        userMaxPrio = 0;
     }
     else
       userMaxPrio = 0;
@@ -243,36 +263,29 @@ float CThread::GetRelativeUsage()
   return m_fLastUsage;
 }
 
-void CThread::Action()
+void term_handler (int signum)
 {
-  try
+  XbmcCommons::ILogger* logger = CThread::GetLogger();
+  if (logger)
+    logger->Log(LOGERROR,"thread 0x%lx (%lu) got signal %d. calling OnException and terminating thread abnormally.", (long unsigned int)pthread_self(), (long unsigned int)pthread_self(), signum);
+  CThread* curThread = CThread::GetCurrentThread();
+  if (curThread)
   {
-    OnStartup();
+    curThread->StopThread(false);
+    curThread->OnException();
+    if( curThread->IsAutoDelete() )
+      delete curThread;
   }
-  catch (...)
-  {
-    CLog::Log(LOGERROR, "%s - thread %s, Unhandled exception caught in thread startup, aborting. auto delete: %d", __FUNCTION__, m_ThreadName.c_str(), IsAutoDelete());
-    if (IsAutoDelete())
-      return;
-  }
-
-  try
-  {
-    Process();
-  }
-  catch (...)
-  {
-    CLog::Log(LOGERROR, "%s - thread %s, Unhandled exception caught in thread process, aborting. auto delete: %d", __FUNCTION__, m_ThreadName.c_str(), IsAutoDelete());
-  }
-
-  try
-  {
-    OnExit();
-  }
-  catch (...)
-  {
-    CLog::Log(LOGERROR, "%s - thread %s, Unhandled exception caught in thread exit, aborting. auto delete: %d", __FUNCTION__, m_ThreadName.c_str(), IsAutoDelete());
-  }
+  pthread_exit(NULL);
 }
 
+void CThread::SetSignalHandlers()
+{
+  struct sigaction action;
+  action.sa_handler = term_handler;
+  sigemptyset (&action.sa_mask);
+  action.sa_flags = 0;
+  //sigaction (SIGABRT, &action, NULL);
+  //sigaction (SIGSEGV, &action, NULL);
+}
 

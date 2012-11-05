@@ -1,6 +1,6 @@
 #pragma once
 /*
- *      Copyright (C) 2005-2011 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -90,42 +89,59 @@ namespace PERIPHERALS
     CPeripheralCecAdapter(const PeripheralType type, const PeripheralBusType busType, const CStdString &strLocation, const CStdString &strDeviceName, int iVendorId, int iProductId);
     virtual ~CPeripheralCecAdapter(void);
 
-    virtual void Announce(ANNOUNCEMENT::AnnouncementFlag flag, const char *sender, const char *message, const CVariant &data);
-    virtual bool HasConnectedAudioSystem(void);
-    virtual void SetAudioSystemConnected(bool bSetTo);
-    virtual void ScheduleVolumeUp(void);
-    virtual void VolumeUp(void);
-    virtual void ScheduleVolumeDown(void);
-    virtual void VolumeDown(void);
-    virtual void ScheduleMute(void);
-    virtual void Mute(void);
-    virtual bool IsMuted(void);
+    void Announce(ANNOUNCEMENT::AnnouncementFlag flag, const char *sender, const char *message, const CVariant &data);
+    bool HasConnectedAudioSystem(void);
+    void SetAudioSystemConnected(bool bSetTo);
+    void ScheduleVolumeUp(void);
+    void VolumeUp(void);
+    void ScheduleVolumeDown(void);
+    void VolumeDown(void);
+    void ScheduleMute(void);
+    void Mute(void);
+    bool IsMuted(void);
 
-    virtual void OnSettingChanged(const CStdString &strChangedSetting);
+    void OnSettingChanged(const CStdString &strChangedSetting);
+    void OnDeviceRemoved(void);
 
-    virtual int GetButton(void);
-    virtual unsigned int GetHoldTime(void);
-    virtual void ResetButton(void);
-    virtual CStdString GetComPort(void);
+    int GetButton(void);
+    unsigned int GetHoldTime(void);
+    void ResetButton(void);
+    CStdString GetComPort(void);
+
+    void PushCecKeypress(const CEC::cec_keypress &key);
+
+    void ActivateSource(void);
+    void StandbyDevices(void);
 
   protected:
-    virtual bool OpenConnection(void);
-    virtual void SetConfigurationFromSettings(void);
-    virtual void SetConfigurationFromLibCEC(const CEC::libcec_configuration &config);
+    bool OpenConnection(void);
+    void SetConfigurationFromSettings(void);
+    void SetConfigurationFromLibCEC(const CEC::libcec_configuration &config);
+    void SetVersionInfo(const CEC::libcec_configuration &configuration);
     static void ReadLogicalAddresses(const CStdString &strString, CEC::cec_logical_addresses &addresses);
-    static int CecKeyPress(void *cbParam, const CEC::cec_keypress &key);
-    static int CecLogMessage(void *cbParam, const CEC::cec_log_message &message);
-    static int CecCommand(void *cbParam, const CEC::cec_command &command);
-    static int CecConfiguration(void *cbParam, const CEC::libcec_configuration &config);
+    static void ReadLogicalAddresses(int iLocalisedId, CEC::cec_logical_addresses &addresses);
+    bool WriteLogicalAddresses(const CEC::cec_logical_addresses& addresses, const std::string& strSettingName, const std::string& strAdvancedSettingName);
+    static int CecKeyPress(void *cbParam, const CEC::cec_keypress key);
+    void PushCecKeypress(const CecButtonPress &key);
+    static int CecLogMessage(void *cbParam, const CEC::cec_log_message message);
+    static int CecCommand(void *cbParam, const CEC::cec_command command);
+    static int CecConfiguration(void *cbParam, const CEC::libcec_configuration config);
+    static int CecAlert(void *cbParam, const CEC::libcec_alert alert, const CEC::libcec_parameter data);
+    static void CecSourceActivated(void *param, const CEC::cec_logical_address address, const uint8_t activated);
+    bool IsRunning(void) const;
+    void ReopenConnection(void);
+    void ProcessActivateSource(void);
+    void ProcessStandbyDevices(void);
 
-    virtual bool GetNextKey(void);
-    virtual bool GetNextCecKey(CEC::cec_keypress &key);
-    virtual bool InitialiseFeature(const PeripheralFeature feature);
-    virtual void Process(void);
-    virtual void ProcessVolumeChange(void);
-    virtual void SetMenuLanguage(const char *strLanguage);
+    void GetNextKey(void);
+    bool InitialiseFeature(const PeripheralFeature feature);
+    void Process(void);
+    void ProcessVolumeChange(void);
+    void SetMenuLanguage(const char *strLanguage);
     static bool FindConfigLocation(CStdString &strString);
     static bool TranslateComPort(CStdString &strPort);
+
+    void ResetMembers(void);
 
     DllLibCEC*                        m_dll;
     CEC::ICECAdapter*                 m_cecAdapter;
@@ -135,17 +151,23 @@ namespace PERIPHERALS
     bool                              m_bHasConnectedAudioSystem;
     CStdString                        m_strMenuLanguage;
     CDateTime                         m_screensaverLastActivated;
-    CecButtonPress                    m_button;
-    std::queue<CEC::cec_keypress>     m_buttonQueue;
+    std::vector<CecButtonPress>       m_buttonQueue;
+    CecButtonPress                    m_currentButton;
     std::queue<CecVolumeChange>       m_volumeChangeQueue;
     unsigned int                      m_lastKeypress;
     CecVolumeChange                   m_lastChange;
     int                               m_iExitCode;
     bool                              m_bIsMuted;
+    bool                              m_bGoingToStandby;
+    bool                              m_bIsRunning;
+    bool                              m_bDeviceRemoved;
     CPeripheralCecAdapterUpdateThread*m_queryThread;
     CEC::ICECCallbacks                m_callbacks;
     CCriticalSection                  m_critSection;
     CEC::libcec_configuration         m_configuration;
+    bool                              m_bActiveSourcePending;
+    bool                              m_bStandbyPending;
+    CDateTime                         m_preventActivateSourceOnPlay;
   };
 
   class CPeripheralCecAdapterUpdateThread : public CThread
@@ -154,13 +176,15 @@ namespace PERIPHERALS
     CPeripheralCecAdapterUpdateThread(CPeripheralCecAdapter *adapter, CEC::libcec_configuration *configuration);
     virtual ~CPeripheralCecAdapterUpdateThread(void);
 
-    virtual void Signal(void);
-    virtual bool UpdateConfiguration(CEC::libcec_configuration *configuration);
+    void Signal(void);
+    bool UpdateConfiguration(CEC::libcec_configuration *configuration);
 
   protected:
-    virtual bool WaitReady(void);
-    virtual bool SetInitialConfiguration(void);
-    virtual void Process(void);
+    void UpdateMenuLanguage(void);
+    CStdString UpdateAudioSystemStatus(void);
+    bool WaitReady(void);
+    bool SetInitialConfiguration(void);
+    void Process(void);
 
     CPeripheralCecAdapter *    m_adapter;
     CEvent                     m_event;

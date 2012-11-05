@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2010 Team XBMC
+ *      Copyright (C) 2010-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -30,6 +29,7 @@
 #include "AdvancedSettings.h"
 #include "FileItem.h"
 #include "Application.h"
+#include "ApplicationMessenger.h"
 #include "WindowingFactory.h"
 #include "VideoReferenceClock.h"
 #include "utils/log.h"
@@ -346,7 +346,7 @@
     if (!g_application.m_bStop)
     {
       ThreadMessage tMsg = {TMSG_QUIT};
-      g_application.getApplicationMessenger().SendMessage(tMsg);
+      CApplicationMessenger::Get().SendMessage(tMsg);
     }
     // wait for animation thread to die
     if ([animationThread isFinished] == NO)
@@ -358,6 +358,7 @@
 - (void) runAnimation:(id) arg
 {
   CCocoaAutoPool outerpool;
+  bool readyToRun = true;
 
   // signal we are alive
   NSConditionLock* myLock = arg;
@@ -381,7 +382,25 @@
   setlocale(LC_NUMERIC, "C");
  
   g_application.Preflight();
-  if (g_application.Create())
+  if (!g_application.Create())
+  {
+    readyToRun = false;
+    NSLog(@"%sUnable to create application", __PRETTY_FUNCTION__);
+  }
+
+  if (!g_application.CreateGUI())
+  {
+    readyToRun = false;
+    NSLog(@"%sUnable to create GUI", __PRETTY_FUNCTION__);
+  }
+
+  if (!g_application.Initialize())
+  {
+    readyToRun = false;
+    NSLog(@"%sUnable to initialize application", __PRETTY_FUNCTION__);
+  }
+  
+  if (readyToRun)
   {
     g_advancedSettings.m_startFullScreen = true;
     g_advancedSettings.m_canWindowed = false;
@@ -395,10 +414,6 @@
     {
       NSLog(@"%sException caught on main loop. Exiting", __PRETTY_FUNCTION__);
     }
-  }
-  else
-  {
-    NSLog(@"%sUnable to create application", __PRETTY_FUNCTION__);
   }
 
   // signal we are dead

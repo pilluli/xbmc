@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,18 +13,15 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
 #include "Directory.h"
 #include "DirectoryFactory.h"
 #include "FileDirectoryFactory.h"
-#ifndef _LINUX
-#include "utils/Win32Exception.h"
-#endif
+#include "commons/Exception.h"
 #include "FileItem.h"
 #include "DirectoryCache.h"
 #include "settings/GUISettings.h"
@@ -123,7 +120,7 @@ bool CDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items, c
   CHints hints;
   hints.flags = flags;
   hints.mask = strMask;
-  return GetDirectory(strPath, items, hints);
+  return GetDirectory(strPath, items, hints, allowThreads);
 }
 
 bool CDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items, const CHints &hints, bool allowThreads)
@@ -164,11 +161,19 @@ bool CDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items, c
             {
               CSingleLock lock(g_graphicsContext);
 
+              // update progress
+              float progress = pDirectory->GetProgress();
+              if (progress > 0)
+                dialog->SetProgress(progress);
+
               if(dialog->IsCanceled())
               {
                 cancel = true;
+                pDirectory->CancelDirectory();
                 break;
               }
+
+              lock.Leave(); // prevent an occasional deadlock on exit
               g_windowManager.ProcessRenderLoop(false);
             }
             if(dialog)
@@ -218,12 +223,7 @@ bool CDirectory::GetDirectory(const CStdString& strPath, CFileItemList &items, c
 
     return true;
   }
-#ifndef _LINUX
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__);
-  }
-#endif
+  XBMCCOMMONS_HANDLE_UNCHECKED
   catch (...)
   {
     CLog::Log(LOGERROR, "%s - Unhandled exception", __FUNCTION__);
@@ -242,12 +242,7 @@ bool CDirectory::Create(const CStdString& strPath)
       if(pDirectory->Create(realPath.c_str()))
         return true;
   }
-#ifndef _LINUX
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__);
-  }
-#endif
+  XBMCCOMMONS_HANDLE_UNCHECKED
   catch (...)
   {
     CLog::Log(LOGERROR, "%s - Unhandled exception", __FUNCTION__);
@@ -265,12 +260,7 @@ bool CDirectory::Exists(const CStdString& strPath)
     if (pDirectory.get())
       return pDirectory->Exists(realPath.c_str());
   }
-#ifndef _LINUX
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__);
-  }
-#endif
+  XBMCCOMMONS_HANDLE_UNCHECKED
   catch (...)
   {
     CLog::Log(LOGERROR, "%s - Unhandled exception", __FUNCTION__);
@@ -289,12 +279,7 @@ bool CDirectory::Remove(const CStdString& strPath)
       if(pDirectory->Remove(realPath.c_str()))
         return true;
   }
-#ifndef _LINUX
-  catch (const win32_exception &e)
-  {
-    e.writelog(__FUNCTION__);
-  }
-#endif
+  XBMCCOMMONS_HANDLE_UNCHECKED
   catch (...)
   {
     CLog::Log(LOGERROR, "%s - Unhandled exception", __FUNCTION__);

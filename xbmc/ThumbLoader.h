@@ -1,5 +1,6 @@
+#pragma once
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,60 +14,27 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
-#ifndef THUMBLOADER_H
-#define THUMBLOADER_H
 #include "BackgroundInfoLoader.h"
-#include "utils/JobManager.h"
-#include "FileItem.h"
-
-class CStreamDetails;
-class IStreamDetailsObserver;
-class CVideoDatabase;
-
-/*!
- \ingroup thumbs,jobs
- \brief Thumb extractor job class
-
- Used by the CVideoThumbLoader to perform asynchronous generation of thumbs
-
- \sa CVideoThumbLoader and CJob
- */
-class CThumbExtractor : public CJob
-{
-public:
-  CThumbExtractor(const CFileItem& item, const CStdString& listpath, bool thumb, const CStdString& strTarget="");
-  virtual ~CThumbExtractor();
-
-  /*!
-   \brief Work function that extracts thumb.
-   */
-  virtual bool DoWork();
-
-  virtual const char* GetType() const
-  {
-    return "mediaflags";
-  }
-
-  virtual bool operator==(const CJob* job) const;
-
-  CStdString m_path; ///< path of video to extract thumb from
-  CStdString m_target; ///< thumbpath
-  CStdString m_listpath; ///< path used in fileitem list
-  CFileItem  m_item;
-  bool       m_thumb; ///< extract thumb?
-};
+#include "utils/StdString.h"
 
 class CThumbLoader : public CBackgroundInfoLoader
 {
 public:
   CThumbLoader(int nThreads=-1);
   virtual ~CThumbLoader();
+
+  virtual void Initialize() { };
+
+  /*! \brief helper function to fill the art for a library item
+   \param item a CFileItem
+   \return true if we fill art, false otherwise
+   */
+  virtual bool FillLibraryArt(CFileItem &item) { return false; }
 
   /*! \brief Checks whether the given item has an image listed in the texture database
    \param item CFileItem to check
@@ -81,51 +49,6 @@ public:
    \param image the URL of the image
    */
   static void SetCachedImage(const CFileItem &item, const CStdString &type, const CStdString &image);
-};
-
-class CVideoThumbLoader : public CThumbLoader, public CJobQueue
-{
-public:
-  CVideoThumbLoader();
-  virtual ~CVideoThumbLoader();
-  virtual bool LoadItem(CFileItem* pItem);
-  void SetStreamDetailsObserver(IStreamDetailsObserver *pObs) { m_pStreamDetailsObs = pObs; }
-
-  /*! \brief Fill the thumb of a video item
-   First uses a cached thumb from a previous run, then checks for a local thumb
-   and caches it for the next run
-   \param item the CFileItem object to fill
-   \return true if we fill the thumb, false otherwise
-   */
-  static bool FillThumb(CFileItem &item);
-
-  /*! \brief helper function to retrieve a thumb URL for embedded video thumbs
-   \param item a video CFileItem.
-   \return a URL for the embedded thumb.
-   */
-  static CStdString GetEmbeddedThumbURL(const CFileItem &item);
-
-  /*! \brief helper function to fill the art for a video library item
-   \param item a video CFileItem
-   \return true if we fill art, false otherwise
-   */
-  bool FillLibraryArt(CFileItem *item);
-
-  /*!
-   \brief Callback from CThumbExtractor on completion of a generated image
-
-   Performs the callbacks and updates the GUI.
-
-   \sa CImageLoader, IJobCallback
-   */
-  virtual void OnJobComplete(unsigned int jobID, bool success, CJob *job);
-
-protected:
-  virtual void OnLoaderStart() ;
-  virtual void OnLoaderFinish() ;
-
-  IStreamDetailsObserver *m_pStreamDetailsObs;
-  CVideoDatabase *m_database;
 };
 
 class CProgramThumbLoader : public CThumbLoader
@@ -152,12 +75,3 @@ public:
    */
   static CStdString GetLocalThumb(const CFileItem &item);
 };
-
-class CMusicThumbLoader : public CThumbLoader
-{
-public:
-  CMusicThumbLoader();
-  virtual ~CMusicThumbLoader();
-  virtual bool LoadItem(CFileItem* pItem);
-};
-#endif

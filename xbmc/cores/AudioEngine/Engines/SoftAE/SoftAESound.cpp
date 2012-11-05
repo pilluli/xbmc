@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -28,15 +27,12 @@
 
 #include "AEFactory.h"
 #include "AEAudioFormat.h"
-#include "Utils/AEConvert.h"
-#include "Utils/AERemap.h"
-#include "Utils/AEUtil.h"
 
 #include "SoftAE.h"
 #include "SoftAESound.h"
 
 /* typecast AE to CSoftAE */
-#define AE (*((CSoftAE*)CAEFactory::AE))
+#define AE (*((CSoftAE*)CAEFactory::GetEngine()))
 
 typedef struct
 {
@@ -50,26 +46,35 @@ CSoftAESound::CSoftAESound(const std::string &filename) :
   m_volume         (1.0f    ),
   m_inUse          (0       )
 {
+  m_wavLoader.Load(filename);
 }
 
 CSoftAESound::~CSoftAESound()
 {
-  DeInitialize();
 }
 
 void CSoftAESound::DeInitialize()
 {
-  m_wavLoader.DeInitialize();
+}
+
+bool CSoftAESound::IsCompatible()
+{
+  if (!m_wavLoader.IsValid())
+    return false;
+
+  return m_wavLoader.IsCompatible(AE.GetSampleRate(), AE.GetChannelLayout());
 }
 
 bool CSoftAESound::Initialize()
 {
-  DeInitialize();
-
-  if (!m_wavLoader.Initialize(m_filename, AE.GetSampleRate()))
+  if (!m_wavLoader.IsValid())
     return false;
 
-  return m_wavLoader.Remap(AE.GetChannelLayout(), AE.GetStdChLayout());
+  return m_wavLoader.Initialize(
+    AE.GetSampleRate   (),
+    AE.GetChannelLayout(),
+    AE.GetStdChLayout  ()
+  );
 }
 
 unsigned int CSoftAESound::GetSampleCount()

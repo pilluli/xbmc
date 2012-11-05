@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -15,9 +15,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -36,9 +35,9 @@
 #define HAS_SCREENSAVER
 #define HAS_PYTHON
 #define HAS_SYSINFO
-#define HAS_UPNP
 #define HAS_VIDEO_PLAYBACK
 #define HAS_VISUALISATION
+#define HAS_PVRCLIENTS
 
 #ifdef HAVE_LIBMICROHTTPD
 #define HAS_WEB_SERVER
@@ -46,7 +45,6 @@
 #endif
 
 #define HAS_JSONRPC
-#define HAS_HTTPAPI
 
 #ifdef USE_ASAP_CODEC
 #define HAS_ASAP_CODEC
@@ -80,6 +78,14 @@
   #define HAS_AIRTUNES
 #endif
 
+#ifdef HAVE_MYSQL
+  #define HAS_MYSQL
+#endif
+
+#if defined(USE_UPNP)
+  #define HAS_UPNP
+#endif
+
 /**********************
  * Non-free Components
  **********************/
@@ -97,7 +103,6 @@
  *****************/
 
 #if defined(TARGET_WINDOWS)
-#define HAS_SDL
 #define HAS_SDL_JOYSTICK
 #define HAS_DVD_DRIVE
 #define HAS_WIN32_NETWORK
@@ -119,6 +124,8 @@
 #define HAVE_LIBCEC
 #define HAVE_LIBMP3LAME
 #define HAVE_LIBVORBISENC
+#define HAS_MYSQL
+#define HAS_UPNP
 
 #define DECLARE_UNUSED(a,b) a b;
 #endif
@@ -136,6 +143,7 @@
   #endif
   #define HAS_ZEROCONF
   #define HAS_LINUX_NETWORK
+  #define HAS_LCD
 #endif
 
 /*****************
@@ -161,6 +169,8 @@
 #define HAS_SDL_OPENGL
 #endif
 #define HAS_SDL_WIN_EVENTS
+#else
+#define HAS_LINUX_EVENTS
 #endif
 #define HAS_LINUX_NETWORK
 #define HAS_LIRC
@@ -222,6 +232,12 @@
 #include <sys/types.h>
 #include <errno.h>
 #include "PlatformInclude.h"
+#endif
+
+#if defined(TARGET_ANDROID)
+#undef HAS_LINUX_EVENTS
+#undef HAS_LIRC
+#undef HAS_LCD
 #endif
 
 // EGL detected. Dont use GLX!

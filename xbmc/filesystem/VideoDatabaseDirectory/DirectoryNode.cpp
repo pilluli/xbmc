@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -43,6 +42,7 @@
 #include "DirectoryNodeRecentlyAddedMusicVideos.h"
 #include "DirectoryNodeTitleMusicVideos.h"
 #include "DirectoryNodeMusicVideoAlbum.h"
+#include "DirectoryNodeTags.h"
 #include "video/VideoInfoTag.h"
 #include "URL.h"
 #include "settings/AdvancedSettings.h"
@@ -93,6 +93,10 @@ CDirectoryNode* CDirectoryNode::ParseURL(const CStdString& strPath)
     pParent=pNode;
   }
 
+  // Add all the additional URL options to the last node
+  if (pNode)
+    pNode->AddOptions(url.GetOptions());
+
   return pNode;
 }
 
@@ -122,6 +126,8 @@ CDirectoryNode* CDirectoryNode::CreateNode(NODE_TYPE Type, const CStdString& str
     return new CDirectoryNodeCountry(strName, pParent);
   case NODE_TYPE_SETS:
     return new CDirectoryNodeSets(strName, pParent);
+  case NODE_TYPE_TAGS:
+    return new CDirectoryNodeTags(strName, pParent);
   case NODE_TYPE_YEAR:
     return new CDirectoryNodeYear(strName, pParent);
   case NODE_TYPE_ACTOR:
@@ -224,7 +230,19 @@ CStdString CDirectoryNode::BuildPath() const
   for (int i=0; i<(int)array.size(); ++i)
     strPath+=array[i]+"/";
 
+  string options = m_options.GetOptionsString();
+  if (!options.empty())
+    strPath += "?" + options;
+
   return strPath;
+}
+
+void CDirectoryNode::AddOptions(const CStdString &options)
+{
+  if (options.empty())
+    return;
+
+  m_options.AddOptions(options);
 }
 
 //  Collects Query params from this and all parent nodes. If a NODE_TYPE can
@@ -260,6 +278,7 @@ bool CDirectoryNode::GetChilds(CFileItemList& items)
   bool bSuccess=false;
   if (pNode.get())
   {
+    pNode->m_options = m_options;
     bSuccess=pNode->GetContent(items);
     if (bSuccess)
     {
@@ -290,6 +309,10 @@ void CDirectoryNode::AddQueuingFolder(CFileItemList& items) const
   if (items.GetObjectCount() <= 1)
     return;
 
+  CVideoDbUrl videoUrl;
+  if (!videoUrl.FromString(BuildPath()))
+    return;
+
   // hack - as the season node might return episodes
   auto_ptr<CDirectoryNode> pNode(ParseURL(items.GetPath()));
 
@@ -299,7 +322,8 @@ void CDirectoryNode::AddQueuingFolder(CFileItemList& items) const
       {
         CStdString strLabel = g_localizeStrings.Get(20366);
         pItem.reset(new CFileItem(strLabel));  // "All Seasons"
-        pItem->SetPath(BuildPath() + "-1/");
+        videoUrl.AppendPath("-1/");
+        pItem->SetPath(videoUrl.ToString());
         // set the number of watched and unwatched items accordingly
         int watched = 0;
         int unwatched = 0;
@@ -337,7 +361,7 @@ void CDirectoryNode::AddQueuingFolder(CFileItemList& items) const
   if (pItem)
   {
     pItem->m_bIsFolder = true;
-    pItem->SetSpecialSort(g_advancedSettings.m_bVideoLibraryAllItemsOnBottom ? SORT_ON_BOTTOM : SORT_ON_TOP);
+    pItem->SetSpecialSort(g_advancedSettings.m_bVideoLibraryAllItemsOnBottom ? SortSpecialOnBottom : SortSpecialOnTop);
     pItem->SetCanQueue(false);
     items.Add(pItem);
   }
@@ -345,10 +369,7 @@ void CDirectoryNode::AddQueuingFolder(CFileItemList& items) const
 
 bool CDirectoryNode::CanCache() const
 {
-  //  Only cache the directorys in the root
-  //NODE_TYPE childnode=GetChildType();
-  //NODE_TYPE node=GetType();
-
-  // something should probably be cached
-  return true;//(childnode==NODE_TYPE_TITLE_MOVIES || childnode==NODE_TYPE_EPISODES || childnode == NODE_TYPE_SEASONS || childnode == NODE_TYPE_TITLE_TVSHOWS);
+  // no caching is required - the list is cached in CGUIMediaWindow::GetDirectory
+  // if it was slow to fetch anyway.
+  return false;
 }

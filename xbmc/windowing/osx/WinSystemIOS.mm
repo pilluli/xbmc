@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2010 Team XBMC
+ *      Copyright (C) 2010-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,13 +13,12 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
-#if defined(__APPLE__) && defined(__arm__)
+#if defined(TARGET_DARWIN_IOS)
 //hack around problem with xbmc's typedef int BOOL
 // and obj-c's typedef unsigned char BOOL
 #define BOOL XBMC_BOOL 
@@ -30,16 +29,20 @@
 #define BOOL XBMC_BOOL 
 #include "WinSystemIOS.h"
 #include "utils/log.h"
-#include "SpecialProtocol.h"
-#include "Settings.h"
-#include "Texture.h"
+#include "filesystem/SpecialProtocol.h"
+#include "settings/Settings.h"
+#include "guilib/Texture.h"
 #include <vector>
 #undef BOOL
 
 #import <Foundation/Foundation.h>
 #import <OpenGLES/ES2/gl.h>
 #import <OpenGLES/ES2/glext.h>
-#import "XBMCController.h"
+#if defined(TARGET_DARWIN_IOS_ATV2)
+#import "atv2/XBMCController.h"
+#else
+#import "ios/XBMCController.h"
+#endif
 #include "osx/DarwinUtils.h"
 #import <dlfcn.h>
 

@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -142,7 +141,7 @@ bool CMythDirectory::GetGuide(const CStdString& base, CFileItemList &items)
       if (!icon.IsEmpty())
       {
         url.SetFileName("files/channels/" + URIUtils::GetFileName(icon)); // e.g. files/channels/tv3.jpg
-        item->SetThumbnailImage(url.Get());
+        item->SetArt("thumb", url.Get());
       }
 
       items.Add(item);
@@ -309,9 +308,9 @@ bool CMythDirectory::GetRecordings(const CStdString& base, CFileItemList &items,
          * lookups.
          */
         CStdString label(item->m_strTitle);
-        CStdString prodyear = GetValue(m_dll->proginfo_prodyear(program));
-        if (!prodyear.IsEmpty())
-          label += " (" + prodyear + ")";
+        unsigned short year = m_dll->proginfo_year(program);
+        if (year > 0)
+          label.AppendFormat(" (%d)", year);
         item->SetLabel(label);
         item->SetLabelPreformated(true);
       }
@@ -639,7 +638,7 @@ bool CMythDirectory::IsTvShow(const cmyth_proginfo_t program)
   return !IsMovie(program);
 }
 
-bool CMythDirectory::SupportsFileOperations(const CStdString& strPath)
+bool CMythDirectory::SupportsWriteFileOperations(const CStdString& strPath)
 {
   CURL url(strPath);
   CStdString filename = url.GetFileName();

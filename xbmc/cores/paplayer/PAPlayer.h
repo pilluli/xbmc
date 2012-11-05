@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -15,9 +15,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -29,8 +28,9 @@
 #include "threads/SharedSection.h"
 
 #include "cores/IAudioCallback.h"
-#include "cores/AudioEngine/AEFactory.h"
-#include "cores/AudioEngine/Interfaces/AEStream.h"
+#include "cores/AudioEngine/Utils/AEChannelInfo.h"
+
+class IAEStream;
 
 class CFileItem;
 class PAPlayer : public IPlayer, public CThread
@@ -62,7 +62,7 @@ public:
   virtual void Update(bool bPauseDrawing = false) {}
   virtual void ToFFRW(int iSpeed = 0);
   virtual int GetCacheLevel() const;
-  virtual int GetTotalTime();
+  virtual int64_t GetTotalTime();
   virtual int GetAudioBitrate();
   virtual int GetChannels();
   virtual int GetBitsPerSample();
@@ -73,6 +73,20 @@ public:
   virtual bool SkipNext();
 
   static bool HandlesType(const CStdString &type);
+
+  struct
+  {
+    char         m_codec[21];
+    int64_t      m_time;
+    int64_t      m_totalTime;
+    int          m_channelCount;
+    int          m_bitsPerSample;
+    int          m_sampleRate;
+    int          m_audioBitrate;
+    int          m_cacheLevel;
+    bool         m_canSeek;
+  } m_playerGUIData;
+
 protected:
   virtual void OnStartup() {}
   virtual void Process();
@@ -114,7 +128,8 @@ private:
   bool                m_isPlaying;
   bool                m_isPaused;
   bool                m_isFinished;          /* if there are no more songs in the queue */
-  unsigned int        m_crossFadeTime;       /* how long the crossfade is */
+  unsigned int        m_defaultCrossfadeMS;  /* how long the default crossfade is in ms */
+  unsigned int        m_upcomingCrossfadeMS; /* how long the upcoming crossfade is in ms */
   CEvent              m_startEvent;          /* event for playback start */
   StreamInfo*         m_currentStream;       /* the current playing stream */
   IAudioCallback*     m_audioCallback;       /* the viz audio callback */
@@ -133,7 +148,10 @@ private:
   bool PrepareStream(StreamInfo *si);
   bool ProcessStream(StreamInfo *si, double &delay, double &buffer);
   bool QueueData(StreamInfo *si);
-  void UpdateCrossFadingTime(const CFileItem& file);
   int64_t GetTotalTime64();
+  void UpdateCrossfadeTime(const CFileItem& file);
+  void UpdateStreamInfoPlayNextAtFrame(StreamInfo *si, unsigned int crossFadingTime);
+  void UpdateGUIData(StreamInfo *si);
+  int64_t GetTimeInternal();
 };
 

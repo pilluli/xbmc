@@ -5,7 +5,7 @@
 #pragma once
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -19,9 +19,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -36,7 +35,7 @@ class TiXmlNode;
 class CAlbum
 {
 public:
-  CAlbum() { idAlbum = 0; iRating = 0; iYear = 0; };
+  CAlbum() { idAlbum = 0; iRating = 0; iYear = 0; iTimesPlayed = 0; };
   bool operator<(const CAlbum &a) const;
 
   void Reset()
@@ -49,13 +48,15 @@ public:
     moods.clear();
     styles.clear();
     themes.clear();
+    art.clear();
     strReview.Empty();
     strLabel.Empty();
     strType.Empty();
     m_strDateOfRelease.Empty();
     iRating=-1;
     iYear=-1;
-    idArtist = -1;
+    bCompilation = false;
+    iTimesPlayed = 0;
     songs.clear();
   }
 
@@ -77,13 +78,15 @@ public:
   std::vector<std::string> moods;
   std::vector<std::string> styles;
   std::vector<std::string> themes;
+  std::map<std::string, std::string> art;
   CStdString strReview;
   CStdString strLabel;
   CStdString strType;
   CStdString m_strDateOfRelease;
   int iRating;
   int iYear;
-  int idArtist;
+  bool bCompilation;
+  int iTimesPlayed;
   VECSONGS songs;
 };
 

@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2011 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -28,8 +27,13 @@
 #include "devices/PeripheralNyxboard.h"
 #include "devices/PeripheralTuner.h"
 #include "devices/PeripheralCecAdapter.h"
+#include "devices/PeripheralImon.h"
 #include "bus/PeripheralBusUSB.h"
 #include "dialogs/GUIDialogPeripheralManager.h"
+
+#ifdef HAVE_CEC_RPI_API
+#include "bus/linux/PeripheralBusRPi.h"
+#endif
 
 #include "threads/SingleLock.h"
 #include "utils/log.h"
@@ -40,7 +44,9 @@
 #include "guilib/GUIWindowManager.h"
 #include "guilib/LocalizeStrings.h"
 #include "dialogs/GUIDialogKaiToast.h"
+#include "GUIUserMessages.h"
 #include "utils/StringUtils.h"
+#include "Util.h"
 #include "guilib/Key.h"
 
 using namespace PERIPHERALS;
@@ -77,6 +83,9 @@ void CPeripherals::Initialise(void)
 
 #if defined(HAVE_PERIPHERAL_BUS_USB)
     m_busses.push_back(new CPeripheralBusUSB(this));
+#endif
+#ifdef HAVE_CEC_RPI_API
+    m_busses.push_back(new CPeripheralBusRPi(this));
 #endif
 
     /* initialise all known busses */
@@ -136,9 +145,8 @@ void CPeripherals::TriggerDeviceScan(const PeripheralBusType type /* = PERIPHERA
 
 CPeripheralBus *CPeripherals::GetBusByType(const PeripheralBusType type) const
 {
-  CPeripheralBus *bus(NULL);
-
   CSingleLock lock(m_critSection);
+  CPeripheralBus *bus(NULL);
   for (unsigned int iBusPtr = 0; iBusPtr < m_busses.size(); iBusPtr++)
   {
     if (m_busses.at(iBusPtr)->Type() == type)
@@ -153,8 +161,8 @@ CPeripheralBus *CPeripherals::GetBusByType(const PeripheralBusType type) const
 
 CPeripheral *CPeripherals::GetPeripheralAtLocation(const CStdString &strLocation, PeripheralBusType busType /* = PERIPHERAL_BUS_UNKNOWN */) const
 {
-  CPeripheral *peripheral(NULL);
   CSingleLock lock(m_critSection);
+  CPeripheral *peripheral(NULL);
   for (unsigned int iBusPtr = 0; iBusPtr < m_busses.size(); iBusPtr++)
   {
     /* check whether the bus matches if a bus type other than unknown was passed */
@@ -189,8 +197,8 @@ CPeripheralBus *CPeripherals::GetBusWithDevice(const CStdString &strLocation) co
 
 int CPeripherals::GetPeripheralsWithFeature(vector<CPeripheral *> &results, const PeripheralFeature feature, PeripheralBusType busType /* = PERIPHERAL_BUS_UNKNOWN */) const
 {
-  int iReturn(0);
   CSingleLock lock(m_critSection);
+  int iReturn(0);
   for (unsigned int iBusPtr = 0; iBusPtr < m_busses.size(); iBusPtr++)
   {
     /* check whether the bus matches if a bus type other than unknown was passed */
@@ -279,6 +287,10 @@ CPeripheral *CPeripherals::CreatePeripheral(CPeripheralBus &bus, const Periphera
 #endif
     break;
 
+  case PERIPHERAL_IMON:
+    peripheral = new CPeripheralImon(type, bus.Type(), strLocation, strDeviceName, iVendorId, iProductId);
+    break;
+
   default:
     break;
   }
@@ -289,8 +301,6 @@ CPeripheral *CPeripherals::CreatePeripheral(CPeripheralBus &bus, const Periphera
      * Initialise() will make sure that each device is only initialised once */
     if (peripheral->Initialise())
     {
-      if (!bHasMapping)
-        peripheral->SetHidden(true);
       bus.Register(peripheral);
     }
     else
@@ -310,6 +320,10 @@ void CPeripherals::OnDeviceAdded(const CPeripheralBus &bus, const CPeripheral &p
   if (dialog && dialog->IsActive())
     dialog->Update();
 
+  // refresh settings (peripherals manager could be enabled now)
+  CGUIMessage msg(GUI_MSG_UPDATE, WINDOW_SETTINGS_SYSTEM, 0);
+  g_windowManager.SendThreadMessage(msg, WINDOW_SETTINGS_SYSTEM);
+
   CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(35005), peripheral.DeviceName());
 }
 
@@ -318,6 +332,10 @@ void CPeripherals::OnDeviceDeleted(const CPeripheralBus &bus, const CPeripheral 
   CGUIDialogPeripheralManager *dialog = (CGUIDialogPeripheralManager *)g_windowManager.GetWindow(WINDOW_DIALOG_PERIPHERAL_MANAGER);
   if (dialog && dialog->IsActive())
     dialog->Update();
+
+  // refresh settings (peripherals manager could be disabled now)
+  CGUIMessage msg(GUI_MSG_UPDATE, WINDOW_SETTINGS_SYSTEM, 0);
+  g_windowManager.SendThreadMessage(msg, WINDOW_SETTINGS_SYSTEM);
 
   CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info, g_localizeStrings.Get(35006), peripheral.DeviceName());
 }
@@ -486,29 +504,46 @@ void CPeripherals::GetSettingsFromMappingsFile(TiXmlElement *xmlNode, map<CStdSt
       float fMax   = currentNode->Attribute("max") ? (float) atof(currentNode->Attribute("max")) : 0;
       setting = new CSettingFloat(0, strKey, iLabelId, fValue, fMin, fStep, fMax, SPIN_CONTROL_FLOAT);
     }
+    else if (strSettingsType.Equals("enum"))
+    {
+      CStdString strEnums(currentNode->Attribute("lvalues"));
+      if (!strEnums.IsEmpty())
+      {
+        map<int,int> enums;
+        vector<CStdString> valuesVec;
+        CUtil::Tokenize(strEnums, valuesVec, "|");
+        for (unsigned int i = 0; i < valuesVec.size(); i++)
+          enums.insert(make_pair(atoi(valuesVec[i]), atoi(valuesVec[i])));
+        int iValue = currentNode->Attribute("value") ? atoi(currentNode->Attribute("value")) : 0;
+        setting = new CSettingInt(0, strKey, iLabelId, iValue, enums, SPIN_CONTROL_TEXT);
+      }
+    }
     else
     {
       CStdString strValue(currentNode->Attribute("value"));
       setting = new CSettingString(0, strKey, iLabelId, strValue, EDIT_CONTROL_INPUT, !bConfigurable, -1);
     }
 
-    //TODO add more types if needed
+    if (setting)
+    {
+      //TODO add more types if needed
 
-    /* set the visibility */
-    setting->SetVisible(bConfigurable);
+      /* set the visibility */
+      setting->SetVisible(bConfigurable);
 
-    /* set the order */
-    int iOrder(0);
-    currentNode->Attribute("order", &iOrder);
-    /* if the order attribute is invalid or 0, then the setting will be added at the end */
-    if (iOrder < 0)
-      iOrder = 0;
-    setting->SetOrder(iOrder);
-    if (iOrder > iMaxOrder)
-      iMaxOrder = iOrder;
+      /* set the order */
+      int iOrder(0);
+      currentNode->Attribute("order", &iOrder);
+      /* if the order attribute is invalid or 0, then the setting will be added at the end */
+      if (iOrder < 0)
+        iOrder = 0;
+      setting->SetOrder(iOrder);
+      if (iOrder > iMaxOrder)
+       iMaxOrder = iOrder;
 
-    /* and add this new setting */
-    m_settings[strKey] = setting;
+      /* and add this new setting */
+      m_settings[strKey] = setting;
+    }
 
     currentNode = currentNode->NextSiblingElement("setting");
   }

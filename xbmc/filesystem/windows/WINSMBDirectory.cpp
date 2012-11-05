@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -95,9 +94,9 @@ bool CWINSMBDirectory::GetDirectory(const CStdString& strPath1, CFileItemList &i
       m_bHost = false;
     }
     else
-      ret = EnumerateFunc(lpnr, items);  
- 
-    return ret; 
+      ret = EnumerateFunc(lpnr, items);
+
+    return ret;
   }
 
   memset(&wfd, 0, sizeof(wfd));
@@ -108,14 +107,14 @@ bool CWINSMBDirectory::GetDirectory(const CStdString& strPath1, CFileItemList &i
     strUNCShare.append("\\");
 
   CStdStringW strSearchMask;
-  g_charsetConverter.utf8ToW(strUNCShare, strSearchMask, false); 
+  g_charsetConverter.utf8ToW(strUNCShare, strSearchMask, false);
   strSearchMask += "*";
 
   FILETIME localTime;
   CAutoPtrFind hFind ( FindFirstFileW(strSearchMask.c_str(), &wfd));
-  
+
   // on error, check if path exists at all, this will return true if empty folder
-  if (!hFind.isValid()) 
+  if (!hFind.isValid())
   {
     DWORD ret = GetLastError();
     if(ret == ERROR_INVALID_PASSWORD || ret == ERROR_LOGON_FAILURE || ret == ERROR_ACCESS_DENIED || ret == ERROR_INVALID_HANDLE)
@@ -204,7 +203,7 @@ bool CWINSMBDirectory::Exists(const char* strPath)
   DWORD attributes = GetFileAttributesW(strWReplaced);
   if(attributes == INVALID_FILE_ATTRIBUTES)
     return false;
-  if (FILE_ATTRIBUTE_DIRECTORY & attributes) 
+  if (FILE_ATTRIBUTE_DIRECTORY & attributes)
     return true;
   return false;
 }
@@ -225,20 +224,20 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
                             lpnr,                // NULL first time the function is called
                             &hEnum);             // handle to the resource
 
-  if (dwResult != NO_ERROR) 
+  if (dwResult != NO_ERROR)
   {
     CLog::Log(LOGERROR,"WnetOpenEnum failed with error %d", dwResult);
     if(dwResult == ERROR_EXTENDED_ERROR)
     {
-      DWORD dwWNetResult, dwLastError;   
-      CHAR szDescription[256]; 
-      CHAR szProvider[256]; 
+      DWORD dwWNetResult, dwLastError;
+      CHAR szDescription[256];
+      CHAR szProvider[256];
       dwWNetResult = WNetGetLastError(&dwLastError, // error code
-                            (LPSTR) szDescription,  // buffer for error description 
+                            (LPSTR) szDescription,  // buffer for error description
                             sizeof(szDescription),  // size of error buffer
-                            (LPSTR) szProvider,     // buffer for provider name 
+                            (LPSTR) szProvider,     // buffer for provider name
                             sizeof(szProvider));    // size of name buffer
-      if(dwWNetResult == NO_ERROR) 
+      if(dwWNetResult == NO_ERROR)
         CLog::Log(LOGERROR,"%s failed with code %ld; %s", szProvider, dwLastError, szDescription);
     }
     return false;
@@ -247,13 +246,13 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
   // Call the GlobalAlloc function to allocate resources.
   //
   lpnrLocal = (LPNETRESOURCEW) GlobalAlloc(GPTR, cbBuffer);
-  if (lpnrLocal == NULL) 
+  if (lpnrLocal == NULL)
   {
     CLog::Log(LOGERROR,"Can't allocate buffer %d", cbBuffer);
     return false;
   }
 
-  do 
+  do
   {
     //
     // Initialize the buffer.
@@ -270,14 +269,14 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
     //
     // If the call succeeds, loop through the structures.
     //
-    if (dwResultEnum == NO_ERROR) 
+    if (dwResultEnum == NO_ERROR)
     {
-      for (DWORD i = 0; i < cEntries; i++) 
+      for (DWORD i = 0; i < cEntries; i++)
       {
         DWORD dwDisplayType = lpnrLocal[i].dwDisplayType;
         DWORD dwType = lpnrLocal[i].dwType;
 
-        if((((dwDisplayType == RESOURCEDISPLAYTYPE_SERVER) && (m_bHost == false)) || 
+        if((((dwDisplayType == RESOURCEDISPLAYTYPE_SERVER) && (m_bHost == false)) ||
            ((dwDisplayType == RESOURCEDISPLAYTYPE_SHARE) && m_bHost)) &&
            (dwType != RESOURCETYPE_PRINT))
         {
@@ -307,7 +306,7 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
           items.Add(pItem);
         }
 
-        // If the NETRESOURCE structure represents a container resource, 
+        // If the NETRESOURCE structure represents a container resource,
         //  call the EnumerateFunc function recursively.
         if (RESOURCEUSAGE_CONTAINER == (lpnrLocal[i].dwUsage & RESOURCEUSAGE_CONTAINER))
           EnumerateFunc(&lpnrLocal[i], items);
@@ -315,7 +314,7 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
     }
     // Process errors.
     //
-    else if (dwResultEnum != ERROR_NO_MORE_ITEMS) 
+    else if (dwResultEnum != ERROR_NO_MORE_ITEMS)
     {
       CLog::Log(LOGERROR,"WNetEnumResource failed with error %d", dwResultEnum);
       break;
@@ -334,7 +333,7 @@ bool CWINSMBDirectory::EnumerateFunc(LPNETRESOURCEW lpnr, CFileItemList &items)
   //
   dwResult = WNetCloseEnum(hEnum);
 
-  if (dwResult != NO_ERROR) 
+  if (dwResult != NO_ERROR)
   {
       //
       // Process errors.
@@ -391,7 +390,7 @@ bool CWINSMBDirectory::ConnectToShare(const CURL& url)
       {
         dwRet2 = WNetCancelConnection2((LPCSTR)strRN.c_str(), 0, false);
         strRN.erase(strRN.find_last_of("\\"),CStdString::npos);
-      } 
+      }
       while(dwRet2 == ERROR_NOT_CONNECTED && !strRN.Equals("\\\\"));
     }
     else if(dwRet != NO_ERROR)

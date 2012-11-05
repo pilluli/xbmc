@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -31,7 +30,6 @@
 #include "cores/AudioEngine/AEFactory.h"
 
 using namespace std;
-using namespace XFILE;
 
 CGUIAudioManager g_audioManager;
 
@@ -84,7 +82,7 @@ void CGUIAudioManager::PlayActionSound(const CAction& action)
     return;
 
   if (it->second)
-    it->second->Play();;
+    it->second->Play();
 }
 
 // \brief Play a sound associated with a window and its event
@@ -298,7 +296,7 @@ IAESound* CGUIAudioManager::LoadSound(const CStdString &filename)
     return it->second.sound;
   }
 
-  IAESound *sound = CAEFactory::AE->MakeSound(filename);
+  IAESound *sound = CAEFactory::MakeSound(filename);
   if (!sound)
     return NULL;
 
@@ -316,7 +314,7 @@ void CGUIAudioManager::FreeSound(IAESound *sound)
   for(soundCache::iterator it = m_soundCache.begin(); it != m_soundCache.end(); ++it) {
     if (it->second.sound == sound) {
       if (--it->second.usage == 0) {     
-        CAEFactory::AE->FreeSound(sound);
+        CAEFactory::FreeSound(sound);
         m_soundCache.erase(it);
       }
       return;
@@ -341,8 +339,7 @@ IAESound* CGUIAudioManager::LoadWindowSound(TiXmlNode* pWindowNode, const CStdSt
 void CGUIAudioManager::Enable(bool bEnable)
 {
   // always deinit audio when we don't want gui sounds
-  if (g_guiSettings.GetString("lookandfeel.soundskin")=="OFF")
-    bEnable = false;
+  bEnable = (g_guiSettings.GetString("lookandfeel.soundskin")=="OFF") ? false : true;
 
   CSingleLock lock(m_cs);
   m_bEnabled = bEnable;

@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -28,6 +27,7 @@
 #include "filesystem/CurlFile.h"
 #include "dialogs/GUIDialogContextMenu.h"
 #include "Application.h"
+#include "ApplicationMessenger.h"
 #include "GUIInfoManager.h"
 #include "video/VideoInfoTag.h"
 #include "guilib/GUIWindowManager.h"
@@ -57,6 +57,8 @@ CTuxBoxService::~CTuxBoxService()
 CTuxBoxUtil::CTuxBoxUtil(void)
 {
   sCurSrvData.requested_audio_channel = 0;
+  sZapstream.initialized = false;
+  sZapstream.available = false;
 }
 CTuxBoxUtil::~CTuxBoxUtil(void)
 {
@@ -120,7 +122,7 @@ void CTuxBoxService::Process()
         if (strCurrentServiceName != g_tuxbox.sCurSrvData.service_name && g_application.IsPlaying() && !g_tuxbox.sZapstream.available)
         {
           CLog::Log(LOGDEBUG," - ERROR: Non controlled channel change detected! Stopping current playing stream!");
-          g_application.getApplicationMessenger().MediaStop();
+          CApplicationMessenger::Get().MediaStop();
           break;
         }
       }
@@ -136,7 +138,7 @@ bool CTuxBoxUtil::CreateNewItem(const CFileItem& item, CFileItem& item_new)
   //Build new Item
   item_new.SetLabel(item.GetLabel());
   item_new.SetPath(item.GetPath());
-  item_new.SetThumbnailImage(item.GetThumbnailImage());
+  item_new.SetArt("thumb", item.GetArt("thumb"));
 
   if(g_tuxbox.GetZapUrl(item.GetPath(), item_new))
   {
@@ -318,7 +320,7 @@ bool CTuxBoxUtil::ParseChannels(TiXmlElement *root, CFileItemList &items, CURL &
                     pbItem->SetLabel(strItemName);
                     pbItem->SetLabelPreformated(true);
                     pbItem->SetPath("tuxbox://"+url.GetUserName()+":"+url.GetPassWord()+"@"+url.GetHostName()+strPort+"/cgi-bin/zapTo?path="+strItemPath+".ts");
-                    pbItem->SetThumbnailImage(GetPicon(strItemName)); //Set Picon Image
+                    pbItem->SetArt("thumb", GetPicon(strItemName)); //Set Picon Image
 
                     //DEBUG Log
                     CLog::Log(LOGDEBUG, "%s - Name:    %s", __FUNCTION__,strItemName.c_str());
@@ -429,11 +431,11 @@ bool CTuxBoxUtil::ZapToUrl(CURL url, CStdString strOptions, int ipoint)
         dialog->SetLine( 1, 21335);
         dialog->SetLine( 2, "" );
         dialog->DoModal();
-      }
-      if (!dialog->IsConfirmed())
-      {
-        //DialogYN = NO -> Return false!
-        return false;
+        if (!dialog->IsConfirmed())
+        {
+          //DialogYN = NO -> Return false!
+          return false;
+        }
       }
     }
   }
@@ -579,7 +581,7 @@ bool CTuxBoxUtil::GetZapUrl(const CStdString& strPath, CFileItem &items )
       }
 
       if (g_application.IsPlaying() && !g_tuxbox.sZapstream.available)
-        g_application.getApplicationMessenger().MediaStop();
+        CApplicationMessenger::Get().MediaStop();
 
       strLabel.Format("%s: %s %s-%s",items.GetLabel().c_str(), sCurSrvData.current_event_date.c_str(),sCurSrvData.current_event_start.c_str(), sCurSrvData.current_event_start.c_str());
       strLabel2.Format("%s", sCurSrvData.current_event_description.c_str());
@@ -796,9 +798,9 @@ bool CTuxBoxUtil::StreamInformations(TiXmlElement *pRootElement)
 
   TiXmlNode *pNode = NULL;
   TiXmlNode *pIt = NULL;
-  CStdString strRoot = pRootElement->Value();
-  if(pRootElement !=NULL)
+  if(pRootElement != NULL)
   {
+    CStdString strRoot = pRootElement->Value();
     pNode = pRootElement->FirstChild("frontend");
     if (pNode)
     {
@@ -1439,7 +1441,7 @@ bool CTuxBoxUtil::GetVideoSubChannels(CStdString& strVideoSubChannelName, CStdSt
 
   // IsPlaying, Stop it..
   if(g_application.IsPlaying())
-    g_application.getApplicationMessenger().MediaStop();
+    CApplicationMessenger::Get().MediaStop();
 
   // popup the context menu
   CContextButtons buttons;

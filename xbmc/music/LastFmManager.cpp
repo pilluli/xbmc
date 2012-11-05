@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -24,9 +23,9 @@
 #include "Album.h"
 #include "Artist.h"
 #include "Application.h"
+#include "ApplicationMessenger.h"
 #include "PlayListPlayer.h"
 #include "playlists/PlayListFactory.h"
-#include "pictures/Picture.h"
 #include "utils/md5.h"
 #include "filesystem/File.h"
 #include "filesystem/CurlFile.h"
@@ -277,8 +276,8 @@ bool CLastFmManager::RequestRadioTracks()
     CCurlFile http;
     if (!http.Get(url, html))
     {
-      m_RadioSession.empty();
       CLog::Log(LOGERROR, "LastFmManager: Connect to Last.fm to request tracks failed.");
+      m_RadioSession.clear();
       return false;
     }
   }
@@ -290,8 +289,8 @@ bool CLastFmManager::RequestRadioTracks()
   xmlDoc.Parse(html);
   if (xmlDoc.Error())
   {
-    m_RadioSession.empty();
     CLog::Log(LOGERROR, "LastFmManager: Unable to parse tracklist Error: %s", xmlDoc.ErrorDesc());
+    m_RadioSession.clear();
     return false;
   }
 
@@ -299,7 +298,7 @@ bool CLastFmManager::RequestRadioTracks()
   if (!pRootElement )
   {
     CLog::Log(LOGWARNING, "LastFmManager: No more tracks received");
-    m_RadioSession.empty();
+    m_RadioSession.clear();
     return false;
   }
 
@@ -307,7 +306,7 @@ bool CLastFmManager::RequestRadioTracks()
   if (!pBodyElement )
   {
     CLog::Log(LOGWARNING, "LastFmManager: No more tracks received, no tracklist");
-    m_RadioSession.empty();
+    m_RadioSession.clear();
     return false;
   }
 
@@ -316,7 +315,7 @@ bool CLastFmManager::RequestRadioTracks()
   if (!pTrackElement)
   {
     CLog::Log(LOGWARNING, "LastFmManager: No more tracks received, empty tracklist");
-    m_RadioSession.empty();
+    m_RadioSession.clear();
     return false;
   }
   while (pTrackElement)
@@ -383,7 +382,7 @@ bool CLastFmManager::RequestRadioTracks()
         CStdString coverUrl = child->Value();
         if ((coverUrl != "") && (coverUrl.Find("noimage") == -1) && (coverUrl.Right(1) != "/"))
         {
-          newItem->SetThumbnailImage(coverUrl);
+          newItem->SetArt("thumb", coverUrl);
         }
       }
     }
@@ -424,38 +423,9 @@ void CLastFmManager::CacheTrackThumb(const int nrInitialTracksToAdd)
     CFileItemPtr item = (*m_RadioTrackQueue)[i];
     if (!item->GetMusicInfoTag()->Loaded())
     {
-      //cache albumthumb, GetThumbnailImage contains the url to cache
-      if (item->HasThumbnail())
+      if (!item->HasArt("thumb"))
       {
-        CStdString coverUrl = item->GetThumbnailImage();
-        CStdString crcFile;
-        CStdString cachedFile;
-        CStdString thumbFile;
-
-        Crc32 crc;
-        crc.ComputeFromLowerCase(coverUrl);
-        crcFile.Format("%08x.tbn", (__int32)crc);
-        URIUtils::AddFileToFolder(g_advancedSettings.m_cachePath, crcFile, cachedFile);
-        URIUtils::AddFileToFolder(g_settings.GetLastFMThumbFolder(), crcFile, thumbFile);
-        item->SetThumbnailImage("");
-        try
-        {
-          //download to temp, then make a thumb
-          if (CFile::Exists(thumbFile) || (http.Download(coverUrl, cachedFile) && CPicture::CreateThumbnail(cachedFile, thumbFile)))
-          {
-            if (CFile::Exists(cachedFile))
-              CFile::Delete(cachedFile);
-            item->SetThumbnailImage(thumbFile);
-          }
-        }
-        catch(...)
-        {
-          CLog::Log(LOGERROR, "LastFmManager: exception while caching %s to %s.", coverUrl.c_str(), thumbFile.c_str());
-        }
-      }
-      if (!item->HasThumbnail())
-      {
-        item->SetThumbnailImage("DefaultAlbumCover.png");
+        item->SetArt("thumb", "DefaultAlbumCover.png");
       }
       item->GetMusicInfoTag()->SetLoaded();
     }
@@ -882,7 +852,7 @@ bool CLastFmManager::Love(const CMusicInfoTag& musicinfotag)
     //update the rating to 5, we loved it.
     CMusicInfoTag newTag(musicinfotag);
     newTag.SetRating('5');
-    g_infoManager.SetCurrentSongTag(newTag);
+    CApplicationMessenger::Get().SetCurrentSongTag(newTag);
     //try updating the rating in the database if it's a local file.
     CMusicDatabase musicdatabase;
     if (musicdatabase.Open())
@@ -911,7 +881,7 @@ bool CLastFmManager::Ban(const CMusicInfoTag& musicinfotag)
   if (CallXmlRpc("banTrack", StringUtils::Join(musicinfotag.GetArtist(), g_advancedSettings.m_musicItemSeparator), musicinfotag.GetTitle()))
   {
     //we banned this track so skip to the next track
-    g_application.getApplicationMessenger().ExecBuiltIn("playercontrol(next)");
+    CApplicationMessenger::Get().ExecBuiltIn("playercontrol(next)");
     m_CurrentSong.IsBanned = true;
     return true;
   }

@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- *      Copyright (C) 2005-2008 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://www.xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -15,9 +15,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -49,6 +48,11 @@ class CDemuxStreamVideo;
 class CDemuxStreamAudio;
 class CStreamInfo;
 
+namespace PVR
+{
+  class CPVRChannel;
+}
+
 #define DVDSTATE_NORMAL           0x00000001 // normal dvd state
 #define DVDSTATE_STILL            0x00000002 // currently displaying a still frame
 #define DVDSTATE_WAIT             0x00000003 // waiting for demuxer read error
@@ -63,19 +67,18 @@ public:
   double           dur;    // last frame expected duration
   CDVDStreamInfo   hint;   // stream hints, used to notice stream changes
   void*            stream; // pointer or integer, identifying stream playing. if it changes stream changed
+  int              changes; // remembered counter from stream to track codec changes
   bool             inited;
   bool             started; // has the player started
   const StreamType type;
   const int        player;
   // stuff to handle starting after seek
   double   startpts;
-  CDVDMsg* startsync;
 
   CCurrentStream(StreamType t, int i)
     : type(t)
     , player(i)
   {
-    startsync = NULL;
     Clear();
   }
 
@@ -87,11 +90,9 @@ public:
     dur    = DVD_NOPTS_VALUE;
     hint.Clear();
     stream = NULL;
+    changes = 0;
     inited = false;
     started = false;
-    if(startsync)
-      startsync->Release();
-    startsync = NULL;
     startpts  = DVD_NOPTS_VALUE;
   }
 
@@ -110,7 +111,7 @@ typedef struct
   StreamType   type;
   int          type_index;
   std::string  filename;
-  std::string  filename2;  // for vobsub subtitles, 2 files are necessary (idx/sub) 
+  std::string  filename2;  // for vobsub subtitles, 2 files are necessary (idx/sub)
   std::string  language;
   std::string  name;
   CDemuxStream::EFlags flags;
@@ -182,6 +183,8 @@ public:
   virtual float GetPercentage();
   virtual float GetCachePercentage();
 
+  virtual void RegisterAudioCallback(IAudioCallback* pCallback) { m_dvdPlayerAudio.RegisterAudioCallback(pCallback); }
+  virtual void UnRegisterAudioCallback()                        { m_dvdPlayerAudio.UnRegisterAudioCallback(); }
   virtual void SetVolume(float nVolume)                         { m_dvdPlayerAudio.SetVolume(nVolume); }
   virtual void SetDynamicRangeCompression(long drc)             { m_dvdPlayerAudio.SetDynamicRangeCompression(drc); }
   virtual void GetAudioInfo(CStdString& strAudioInfo);
@@ -192,6 +195,7 @@ public:
   virtual void GetVideoAspectRatio(float& fAR)                  { fAR = m_dvdPlayerVideo.GetAspectRatio(); }
   virtual bool CanRecord();
   virtual bool IsRecording();
+  virtual bool CanPause();
   virtual bool Record(bool bOnOff);
   virtual void SetAVDelay(float fValue = 0.0f);
   virtual float GetAVDelay();
@@ -224,7 +228,7 @@ public:
 
   virtual void SeekTime(int64_t iTime);
   virtual int64_t GetTime();
-  virtual int GetTotalTime();
+  virtual int64_t GetTotalTime();
   virtual void ToFFRW(int iSpeed);
   virtual bool OnAction(const CAction &action);
   virtual bool HasMenu();
@@ -245,15 +249,19 @@ public:
 
   virtual CStdString GetPlayingTitle();
 
+  virtual bool SwitchChannel(const PVR::CPVRChannel &channel);
+  virtual bool CachePVRStream(void) const;
+
   enum ECacheState
   { CACHESTATE_DONE = 0
   , CACHESTATE_FULL     // player is filling up the demux queue
+  , CACHESTATE_PVR      // player is waiting for some data in each buffer
   , CACHESTATE_INIT     // player is waiting for first packet of each stream
   , CACHESTATE_PLAY     // player is waiting for players to not be stalled
   , CACHESTATE_FLUSH    // temporary state player will choose startup between init or full
   };
 
-  virtual bool IsCaching() const { return m_caching == CACHESTATE_FULL; }
+  virtual bool IsCaching() const { return m_caching == CACHESTATE_FULL || m_caching == CACHESTATE_PVR; }
   virtual int GetCacheLevel() const ;
 
   virtual int OnDVDNavResult(void* pData, int iMessage);
@@ -285,6 +293,8 @@ protected:
   void ProcessSubData(CDemuxStream* pStream, DemuxPacket* pPacket);
   void ProcessTeletextData(CDemuxStream* pStream, DemuxPacket* pPacket);
 
+  bool ShowPVRChannelInfo();
+
   int  AddSubtitleFile(const std::string& filename, const std::string& subfilename = "", CDemuxStream::EFlags flags = CDemuxStream::FLAG_NONE);
 
   /**
@@ -306,8 +316,8 @@ protected:
   void HandlePlaySpeed();
   bool IsInMenu() const;
 
-  void SynchronizePlayers(DWORD sources);
-  void SynchronizeDemuxer(DWORD timeout);
+  void SynchronizePlayers(unsigned int sources);
+  void SynchronizeDemuxer(unsigned int timeout);
   void CheckAutoSceneSkip();
   void CheckContinuity(CCurrentStream& current, DemuxPacket* pPacket);
   bool CheckSceneSkip(CCurrentStream& current);
@@ -320,6 +330,7 @@ protected:
   bool ReadPacket(DemuxPacket*& packet, CDemuxStream*& stream);
   bool IsValidStream(CCurrentStream& stream);
   bool IsBetterStream(CCurrentStream& current, CDemuxStream* stream);
+  bool CheckDelayedChannelEntry(void);
 
   bool OpenInputStream();
   bool OpenDemuxStream();
@@ -331,10 +342,11 @@ protected:
 
   bool m_bAbortRequest;
 
-  std::string m_filename; // holds the actual filename
-  std::string m_mimetype;  // hold a hint to what content file contains (mime type)
-  ECacheState m_caching;
-  CFileItem   m_item;
+  std::string  m_filename; // holds the actual filename
+  std::string  m_mimetype;  // hold a hint to what content file contains (mime type)
+  ECacheState  m_caching;
+  CFileItem    m_item;
+  unsigned int m_iChannelEntryTimeOut;
 
 
   CCurrentStream m_CurrentAudio;
@@ -369,7 +381,7 @@ protected:
   CDVDDemux* m_pSubtitleDemuxer;
 
   CStdString m_lastSub;
-  
+
   struct SDVDInfo
   {
     void Clear()
@@ -404,6 +416,8 @@ protected:
       chapter_count = 0;
       canrecord     = false;
       recording     = false;
+      canpause      = false;
+      canseek       = false;
       demux_video   = "";
       demux_audio   = "";
       cache_bytes   = 0;
@@ -428,6 +442,9 @@ protected:
     bool canrecord;           // can input stream record
     bool recording;           // are we currently recording
 
+    bool canpause;            // pvr: can pause the current playing item
+    bool canseek;             // pvr: can seek in the current playing item
+
     std::string demux_video;
     std::string demux_audio;
 
@@ -451,31 +468,13 @@ protected:
       commbreak_start = -1;
       commbreak_end = -1;
       seek_to_start = false;
-      reset = 0;
       mute = false;
-    }
-
-    void ResetCutMarker(double timeout)
-    {
-      if(reset != 0
-      && reset + DVD_MSEC_TO_TIME(timeout) > CDVDClock::GetAbsoluteClock())
-        return;
-
-      /*
-       * Reset the automatic EDL skip marker for a cut so automatic seeking can happen again if,
-       * for example, the initial automatic skip ended up back in the cut due to seeking
-       * inaccuracies.
-       */
-      cut = -1;
-
-      reset = CDVDClock::GetAbsoluteClock();
     }
 
     int cut;              // last automatically skipped EDL cut seek position
     int commbreak_start;  // start time of the last commercial break automatically skipped
     int commbreak_end;    // end time of the last commercial break automatically skipped
     bool seek_to_start;   // whether seeking can go back to the start of a previously skipped break
-    double reset;         // last actual reset time
     bool mute;            // whether EDL mute is on
 
   } m_EdlAutoSkipMarkers;

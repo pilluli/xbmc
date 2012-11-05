@@ -1,5 +1,5 @@
 /*
- *      Copyright (C) 2005-2009 Team XBMC
+ *      Copyright (C) 2005-2012 Team XBMC
  *      http://xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -23,9 +22,11 @@
 #include <string>
 #include <set>
 
-#include "mysqldataset.h"
 #include "utils/log.h"
 #include "system.h" // for GetLastError()
+
+#ifdef HAS_MYSQL
+#include "mysqldataset.h"
 #include "mysql/errmsg.h"
 #ifdef _WIN32
 #pragma comment(lib, "mysqlclient.lib")
@@ -239,7 +240,10 @@ int MysqlDatabase::copy(const char *backup_name) {
     // create the new database
     sprintf(sql, "CREATE DATABASE `%s`", backup_name);
     if ( (ret=query_with_reconnect(sql)) != MYSQL_OK )
+    {
+      mysql_free_result(res);
       throw DbErrors("Can't create database for copy: '%s' (%d)", db.c_str(), ret);
+    }
 
     MYSQL_ROW row;
 
@@ -251,15 +255,22 @@ int MysqlDatabase::copy(const char *backup_name) {
               backup_name, row[0], row[0]);
 
       if ( (ret=query_with_reconnect(sql)) != MYSQL_OK )
+      {
+        mysql_free_result(res);
         throw DbErrors("Can't copy schema for table '%s'\nError: %s", db.c_str(), ret);
+      }
 
       // copy the table data
       sprintf(sql, "INSERT INTO %s.%s SELECT * FROM %s",
               backup_name, row[0], row[0]);
 
       if ( (ret=query_with_reconnect(sql)) != MYSQL_OK )
+      {
+        mysql_free_result(res);
         throw DbErrors("Can't copy data for table '%s'\nError: %s", row[0], ret);
+      }
     }
+    mysql_free_result(res);
 
     // after table are recreated and repopulated we can recreate views
     // grab a list of views and their definitions
@@ -278,7 +289,10 @@ int MysqlDatabase::copy(const char *backup_name) {
                 backup_name, row[0], row[1]);
 
         if ( (ret=query_with_reconnect(sql)) != MYSQL_OK )
+        {
+          mysql_free_result(resViews);
           throw DbErrors("Can't create view '%s'\nError: %s", db.c_str(), ret);
+        }
       }
       mysql_free_result(resViews);
     }
@@ -335,6 +349,7 @@ long MysqlDatabase::nextid(const char* sname) {
     lengths = mysql_fetch_lengths(res);
     CLog::Log(LOGINFO,"Next id is [%.*s] ", (int) lengths[0], row[0]);
     sprintf(sqlcmd,"update %s set nextid=%d where seq_name = '%s'",seq_table,id,sname);
+    mysql_free_result(res);
     if ((last_err = query_with_reconnect(sqlcmd) != 0)) return DB_UNEXPECTED_RESULT;
     return id;
   }
@@ -458,7 +473,7 @@ string MysqlDatabase::vprepare(const char *format, va_list args)
 
 #define etINVALID     0 /* Any unrecognized conversion type */
 
-#define ARRAYSIZE(X)    ((int)(sizeof(X)/sizeof(X[0])))
+#define ARRAY_SIZE(X)    ((int)(sizeof(X)/sizeof(X[0])))
 
 /*
 ** An "etByte" is an 8-bit unsigned value.
@@ -730,7 +745,7 @@ void MysqlDatabase::mysqlVXPrintf(
     /* Fetch the info entry for the field */
     infop = &fmtinfo[0];
     xtype = etINVALID;
-    for(idx=0; idx<ARRAYSIZE(fmtinfo); idx++){
+    for(idx=0; idx<ARRAY_SIZE(fmtinfo); idx++){
       if( c==fmtinfo[idx].fmttype ){
         infop = &fmtinfo[idx];
         if( useExtended || (infop->flags & FLAG_INTERN)==0 ){
@@ -1597,4 +1612,5 @@ void MysqlDataset::interrupt() {
 }
 
 }//namespace
+#endif //HAS_MYSQL
 

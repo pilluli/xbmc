@@ -14,9 +14,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -30,10 +29,6 @@
 #include "threads/SharedSection.h"
 
 #include "Interfaces/ThreadedAE.h"
-#include "Interfaces/AESink.h"
-#include "Interfaces/AEEncoder.h"
-#include "Utils/AEConvert.h"
-#include "Utils/AERemap.h"
 #include "Utils/AEBuffer.h"
 #include "AEAudioFormat.h"
 #include "AESinkFactory.h"
@@ -44,10 +39,8 @@
 #include "cores/IAudioCallback.h"
 
 /* forward declarations */
-class IThreadedAE;
-class CSoftAEStream;
-class CSoftAESound;
 class IAESink;
+class IAEEncoder;
 
 class CSoftAE : public IThreadedAE
 {
@@ -59,10 +52,13 @@ protected:
 public:
   virtual void  Shutdown();
   virtual bool  Initialize();
-  virtual void  OnSettingsChange(std::string setting);
+  virtual void  OnSettingsChange(const std::string& setting);
 
   virtual void   Run();
   virtual void   Stop();
+  virtual bool   Suspend();
+  virtual bool   Resume();
+  virtual bool   IsSuspended();
   virtual double GetDelay();
 
   virtual float GetVolume();
@@ -124,18 +120,24 @@ private:
   bool SetupEncoder(AEAudioFormat &format);
   void Deinitialize();
 
+  inline void GetDeviceFriendlyName(std::string &device);
+
   IAESink *GetSink(AEAudioFormat &desiredFormat, bool passthrough, std::string &device);
   void StopAllSounds();
 
   enum AEStdChLayout m_stdChLayout;
   std::string m_device;
   std::string m_passthroughDevice;
+  std::string m_deviceFriendlyName;
   bool m_audiophile;
   bool m_stereoUpmix;
 
   /* internal vars */
-  bool             m_running, m_reOpen;
+  bool             m_running, m_reOpen, m_isSuspended;
+  bool             m_softSuspend;      /* latches after last stream or sound played for timer below */
+  unsigned int     m_softSuspendTimer; /* time in milliseconds to hold sink open before soft suspend */
   CEvent           m_reOpenEvent;
+  CEvent           m_wake;
 
   CCriticalSection m_runningLock;     /* released when the thread exits */
   CCriticalSection m_streamLock;      /* m_streams lock */
@@ -153,11 +155,14 @@ private:
   AESinkInfoList            m_sinkInfoList;
   IAESink                  *m_sink;
   AEAudioFormat             m_sinkFormat;
-  float                     m_sinkFormatSampleRateMul;
-  float                     m_sinkFormatFrameSizeMul;
+  double                    m_sinkFormatSampleRateMul;
+  double                    m_sinkFormatFrameSizeMul;
   unsigned int              m_sinkBlockSize;
+  bool                      m_sinkHandlesVolume;
   AEAudioFormat             m_encoderFormat;
-  float                     m_encoderFrameSizeMul;
+  double                    m_encoderFrameSizeMul;
+  double                    m_encoderInitSampleRateMul;
+  double                    m_encoderInitFrameSizeMul;
   unsigned int              m_bytesPerSample;
   CAEConvert::AEConvertFrFn m_convertFn;
 
@@ -192,16 +197,38 @@ private:
   uint8_t        *m_converted;
   size_t          m_convertedSize;
 
+  void         AllocateConvIfNeeded(size_t convertedSize, bool prezero = false);
+
   /* thread run stages */
-  void         MixSounds        (float *buffer, unsigned int samples);
-  void         FinalizeSamples  (float *buffer, unsigned int samples);
+
+  /*! \brief Mix UI sounds into the current stream.
+   \param buffer the buffer to mix into.
+   \param samples the number of samples in the buffer.
+   \return the number of sounds mixed into the buffer.
+   */
+  unsigned int MixSounds        (float *buffer, unsigned int samples);
+
+  /*! \brief Finalize samples ready for sending to the output device.
+   Mixes in any UI sounds, applies volume adjustment, and clamps to [-1,1].
+   \param buffer the audio data.
+   \param samples the number of samples in the buffer.
+   \param hasAudio whether we have audio from a stream (true) or silence (false)
+   \return true if we have audio to output, false if we have only silence.
+   */
+  bool         FinalizeSamples  (float *buffer, unsigned int samples, bool hasAudio);
 
   CSoftAEStream *m_masterStream;
 
-  void         (CSoftAE::*m_outputStageFn)();
-  void         RunOutputStage   ();
-  void         RunRawOutputStage();
-  void         RunTranscodeStage();
+  /*! \brief Run the output stage on the audio.
+   Prepares streamed data, mixes in any UI sounds, converts to a format suitable
+   for the sink, then outputs to the sink.
+   \param hasAudio whether or not we have audio (true) or silence (false).
+   \return the number of samples sent to the sink.
+   */
+  int          (CSoftAE::*m_outputStageFn)(bool);
+  int          RunOutputStage   (bool hasAudio);
+  int          RunRawOutputStage(bool hasAudio);
+  int          RunTranscodeStage(bool hasAudio);
 
   unsigned int (CSoftAE::*m_streamStageFn)(unsigned int channelCount, void *out, bool &restart);
   unsigned int RunRawStreamStage (unsigned int channelCount, void *out, bool &restart);

@@ -13,9 +13,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with XBMC; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *  http://www.gnu.org/copyleft/gpl.html
+ *  along with XBMC; see the file COPYING.  If not, see
+ *  <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -80,6 +79,8 @@ public:
   CStdString m_oldHash;
   CTextureDetails m_details;
 private:
+  friend class CEdenVideoArtUpdater;
+
   /*! \brief retrieve a hash for the given image
    Combines the size, ctime and mtime of the image file into a "unique" hash
    \param url location of the image
@@ -100,10 +101,10 @@ private:
    \param url wrapped URL of the image
    \param width width derived from URL
    \param height height derived from URL
-   \param flipped whether the image is flipped horizontally
+   \param additional_info additional information, such as "flipped" to flip horizontally
    \return URL of the underlying image file.
    */
-  static CStdString DecodeImageURL(const CStdString &url, unsigned int &width, unsigned int &height, bool &flipped);
+  static CStdString DecodeImageURL(const CStdString &url, unsigned int &width, unsigned int &height, std::string &additional_info);
 
   /*! \brief Load an image at a given target size and orientation.
 
@@ -113,10 +114,10 @@ private:
    \param image the URL of the image file.
    \param width the desired maximum width.
    \param height the desired maximum height.
-   \param flipped whether the image should be flipped horizontally.
+   \param additional_info extra info for loading, such as whether to flip horizontally.
    \return a pointer to a CBaseTexture object, NULL if failed.
    */
-  static CBaseTexture *LoadImage(const CStdString &image, unsigned int width, unsigned int height, bool flipped);
+  static CBaseTexture *LoadImage(const CStdString &image, unsigned int width, unsigned int height, const std::string &additional_info);
 
   CStdString    m_cachePath;
 };
