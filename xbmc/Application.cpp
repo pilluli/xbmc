@@ -773,6 +773,7 @@ bool CApplication::Create()
 
 bool CApplication::CreateGUI()
 {
+  m_renderGUI = true;
 #ifdef HAS_SDL
   CLog::Log(LOGNOTICE, "Setup SDL");
 
@@ -1333,8 +1334,6 @@ bool CApplication::Initialize()
         return false;
     }
 
-    StartPVRManager();
-
     if (g_advancedSettings.m_splashImage)
       SAFE_DELETE(m_splash);
 
@@ -1354,6 +1353,7 @@ bool CApplication::Initialize()
       CJSONRPC::Initialize();
 #endif
       ADDON::CAddonMgr::Get().StartServices(false);
+      StartPVRManager();
       g_windowManager.ActivateWindow(g_SkinInfo->GetFirstWindow());
     }
 
